@@ -146,6 +146,15 @@ test("hookCommandResolves: npx always starts; a pinned path only while it exists
   assert.equal(hookCommandResolves(`"${process.execPath}" "${cli}" claude`), false, "a deleted pin is reported broken");
 });
 
+test("hookCommandResolves: a native program with no extension (macOS, Linux) starts only while it exists", () => {
+  const root = mkdtempSync(join(tmpdir(), "sb-resolve-native-"));
+  const program = join(root, "scopebond-agent");
+  writeFileSync(program, "");
+  assert.equal(hookCommandResolves(`"${program}" hook claude`), true);
+  rmSync(root, { recursive: true, force: true });
+  assert.equal(hookCommandResolves(`"${program}" hook claude`), false, "a removed program is reported broken");
+});
+
 test("the pinned command survives a shell that treats backslash as an escape", () => {
   // A harness runs the command through a shell that may be bash even on Windows. A Windows
   // path there must be quoted or use forward slashes, or it loses its separators.

@@ -436,7 +436,7 @@ jobs:
           </dict></plist>
           PLIST
           exe=packages/native/build/scopebond-agent
-          codesign --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp --entitlements "$RUNNER_TEMP/entitlements.plist" "$exe"
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp --entitlements "$RUNNER_TEMP/entitlements.plist" "$exe"
           codesign --verify --strict --verbose=2 "$exe"
           ditto -c -k --keepParent "$exe" scopebond-agent-macos.zip
           echo "$APPLE_NOTARY_KEY" > "$RUNNER_TEMP/notary.p8"

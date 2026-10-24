@@ -1,5 +1,5 @@
 // The single executable decides exactly as the npm hook does, and starts quickly. The bundle check runs everywhere; the
-// executable itself is built and run where SCOPEBOND_SEA=1 (the Windows CI job that builds it).
+// executable itself is built and run where SCOPEBOND_SEA=1 (the Windows and macOS CI jobs that build it).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -113,6 +113,17 @@ test("the single executable says it is the Scopebond Agent at this release, and 
   assert.ok(run.stdout.startsWith(`agent/${agent} hook/`), run.stdout);
   assert.doesNotMatch(run.stderr, /SingleExecutableApplication|experimental/i, "it starts as the application, not as plain Node");
   assert.ok(existsSync(join(here, "..", "build", "scopebond.ico")), "the icon the installer uses is written beside it");
+});
+
+test("on macOS the single executable carries a valid (ad-hoc) signature, so Apple silicon lets it run", { skip: (!enabled || process.platform !== "darwin") && "set SCOPEBOND_SEA=1 on macOS to build and run the executable" }, async () => {
+  const built = join(here, "..", "build", "scopebond-agent");
+  const exe = existsSync(built) ? built : await buildSea();
+  const verify = spawnSync("codesign", ["--verify", "--strict", exe], { encoding: "utf8" });
+  assert.equal(verify.status, 0, verify.stderr);
+  const agent = JSON.parse(readFileSync(join(here, "..", "..", "agent", "package.json"), "utf8")).version;
+  const run = spawnSync(exe, ["--version"], { encoding: "utf8" });
+  assert.equal(run.status, 0, `exit ${run.status} ${run.signal ?? ""} ${run.stderr}`);
+  assert.ok(run.stdout.startsWith(`agent/${agent} hook/`), run.stdout);
 });
 
 test("inside the single executable: a signed plugin loads and fills the slot; an unverifiable engine bundle never runs", { skip: !enabled && "set SCOPEBOND_SEA=1 to build and run the executable" }, async () => {

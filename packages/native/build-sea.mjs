@@ -102,6 +102,9 @@ export async function buildSea({ agentVersion, stamp = true } = {}) {
   // icon. The installer reuses the icon for its entry in Settings -> Apps.
   if (windows && stamp) stampExecutable(exe, "agent", agentVersion ?? version("agent"));
   if (windows) writeIcon(join(out, "scopebond.ico"));
+  // Apple silicon kills unsigned code on launch, so the build gets an ad-hoc signature. The release workflow's
+  // Developer ID signature (sign-macos) replaces it.
+  if (process.platform === "darwin") execFileSync("codesign", ["--sign", "-", exe], { stdio: "inherit" });
   return exe;
 }
 
