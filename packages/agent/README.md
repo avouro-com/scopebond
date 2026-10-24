@@ -84,10 +84,19 @@ Node.js nor npm: one signed program is both the agent and the hook, and the Scop
 
 The same executable in a macOS installer package (`packages/native`, `build-pkg.mjs`): `/usr/local/bin/scopebond-agent`
 for every user of the Mac, and a LaunchAgent that runs `scopebond-agent run` as each person who signs in (the agent's own
-autostart label, so it never runs twice). It counts as installed for every user: it does not update itself, and the
-organization or person who installed it installs the next package. The signed executable run from anywhere else on a Mac
-does not update itself either: it never fetches the Windows installer, offers no update in the tray, and says in its log
-that a newer package is recommended. `sudo "/Library/Application Support/Scopebond/uninstall.sh"`
+autostart label, so it never runs twice). It counts as installed for every user.
+
+- **Updates.** The package carries an updater that runs as root (the LaunchDaemon `com.scopebond.updater`). When the
+  workspace recommends a newer signed build, the person's agent asks it for that version, and nothing else. The updater
+  installs it only after the same checks as on Windows: newer than the one installed; the release manifest signed with
+  an updater key built into the program; the package's SHA-256 and size are the manifest's; and the package is signed
+  with Avouro LLC's Developer ID Installer identity and notarized (`pkgutil --check-signature`, `spctl`). The package's
+  own postinstall then starts the new agent for everyone signed in. A package that did not install counts as a failed
+  update and is tried again after 1 hour, 6 hours, then daily. An organization turns updates off with the `AutoUpdate`
+  preference (`false`) in a configuration profile or `/Library/Preferences/com.scopebond.agent`; the person's own value
+  does not turn them on or off.
+- The signed executable run from anywhere else on a Mac does not update itself: it never fetches the Windows installer,
+  offers no update in the tray, and says in its log that a newer package is recommended. `sudo "/Library/Application Support/Scopebond/uninstall.sh"`
 removes it, running `scopebond-agent uninstall` first as the person removing it; `--purge` removes the Scopebond folder
 too.
 

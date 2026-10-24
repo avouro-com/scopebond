@@ -26,6 +26,7 @@ import { writeOutputTo } from "./log-file.js";
 import { refreshAppsEntry, writeAppsEntry } from "./apps-entry.js";
 import { runUninstall } from "./uninstall.js";
 import { installKind, MAC_PACKAGE_EXE, UPDATE_HELPER_COMMAND } from "./native-update.js";
+import { MAC_UPDATER_COMMAND, runMacUpdater } from "./mac-update.js";
 import { upkeepCommand } from "./upkeep.js";
 import { AGENT_VERSION, startService, takeOver } from "./service.js";
 import { agentProgram, npmProgram, setupCli } from "./commands.js";
@@ -93,6 +94,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       if (!input) { console.error("update-helper is started by the Scopebond Agent itself"); process.exitCode = 1; return; }
       const outcome = await runUpdateHelper(input);
       process.exitCode = outcome.installed && outcome.started !== false ? 0 : 1;
+      return;
+    }
+    case MAC_UPDATER_COMMAND: {
+      // Internal: the macOS package's updater (LaunchDaemon com.scopebond.updater) runs this as root (mac-update.ts).
+      if (process.platform !== "darwin" || process.getuid?.() !== 0 || process.execPath !== MAC_PACKAGE_EXE) {
+        console.error(`${MAC_UPDATER_COMMAND} is run by the Scopebond package's updater itself`);
+        process.exitCode = 1;
+        return;
+      }
+      const result = await runMacUpdater();
+      process.exitCode = result && !result.installed ? 1 : 0;
       return;
     }
     case "version":

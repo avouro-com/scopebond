@@ -29,7 +29,7 @@ export function keyIdOfPrivate(privateKeyPem) {
 
 export function manifestFor(version, folder, commit, kid = undefined) {
   if (typeof commit !== "string" || !COMMIT_ID.test(commit)) throw new Error(`a release manifest names its full commit id, not ${commit}`);
-  const files = readdirSync(folder).filter((name) => /\.(exe|msi)$/i.test(name)).sort().map((name) => {
+  const files = readdirSync(folder).filter((name) => /\.(exe|msi|pkg|zip)$/i.test(name)).sort().map((name) => {
     const bytes = readFileSync(join(folder, name));
     return { name, sha256: createHash("sha256").update(bytes).digest("hex"), size: statSync(join(folder, name)).size };
   });

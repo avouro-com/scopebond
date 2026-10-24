@@ -42,7 +42,10 @@ test("no build tool or dependency runs in a release job that can ask for the sig
   assert.ok(!/id-token/.test(all.installer), "the installer job has no OIDC token");
   assert.match(all.installer, /node packages\/native\/build-msi\.mjs out\/scopebond-agent\.exe out\/scopebond-tray\.exe/);
   assert.match(all.installer, /verify-signed\.ps1 -Folder out/, "it checks the signed programs before it builds around them");
-  assert.match(all["sign-installer"], /needs: \[build, installer\]/);
+  assert.match(all["sign-installer"], /needs: \[build, installer, sign-macos\]/);
+  // The signed macOS files join the same sums and signed manifest; a skipped sign-macos (signing off) does not hold it.
+  assert.match(all["sign-installer"], /needs\.sign-macos\.result == 'success' \|\| needs\.sign-macos\.result == 'skipped'/);
+  assert.match(all["sign-installer"], /pattern: signed-macos-\*/);
   // The Apple signing installs nothing either: it signs what build-macos built, with Apple's tools and the package script.
   for (const tool of ["dotnet", "wix ", "pnpm ", "cargo ", "npm install", "npx ", "build-sea"]) {
     assert.ok(!all["sign-macos"].includes(tool), `sign-macos runs ${tool.trim()} with the signing token in reach`);
@@ -54,9 +57,7 @@ test("no build tool or dependency runs in a release job that can ask for the sig
   // The macOS build must pass; its signed files join only when Apple signing ran.
   assert.match(all.release, /needs\.build-macos\.result == 'success'/);
   assert.match(all.release, /needs\.sign-macos\.result == 'success' \|\| needs\.sign-macos\.result == 'skipped'/);
-  // With the macOS files in it, SHA256SUMS is written again over every file of the release.
-  assert.match(all.release, /xargs sha256sum > "\$RUNNER_TEMP\/SHA256SUMS"/);
-  assert.match(all.release, /mv "\$RUNNER_TEMP\/SHA256SUMS" out\/SHA256SUMS/);
+
 });
 
 test("Microsoft Defender scans the programs and the signed files before a release exists", () => {

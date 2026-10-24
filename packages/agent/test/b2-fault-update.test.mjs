@@ -91,3 +91,31 @@ test("on macOS the signed executable never takes the Windows installer's path: a
     assert.ok(m.row("Version").startsWith(`Scopebond ${agentVersion()}`) && !/update/i.test(m.row("Version").replace("up to date", "")), `the tray offers no update it cannot install: ${m.row("Version")}`);
   } finally { await service.stop(); }
 });
+
+test("the macOS package for every user asks its root updater, and a package that did not install is tried again later", async () => {
+  const { mkdirSync, existsSync, readdirSync } = await import("node:fs");
+  const ws = workspace();
+  const { dir } = computer();
+  ws.answers["client-version"] = { policy: "recommended", agent: null, hook: null, native_agent: "0.99.0" };
+  const root = mkdtempSync(join(tmpdir(), "sb-b2-mac-updater-"));
+  const macUpdater = { requests: join(root, "update-requests"), work: join(root, "updater"), result: join(root, "update-result.json") };
+  mkdirSync(macUpdater.requests, { recursive: true });
+  const lines = [];
+  const service = await serve(dir, ws, { installKind: "per-machine", macUpdater, log: (line) => lines.push(line) });
+  const requests = () => (/** @type {string[]} */ (readdirSync(macUpdater.requests)));
+  try {
+    await service.maintainNow();
+    assert.equal(requests().length, 1);
+    const request = join(macUpdater.requests, requests()[0]);
+    assert.deepEqual(JSON.parse(readFileSync(request, "utf8")), { version: "0.99.0" }, "asked for the recommended version");
+    assert.equal(ws.calls.download ?? 0, 0, "the person's agent downloads nothing itself");
+    assert.ok(lines.some((l) => l.includes("asked the Scopebond updater to install")), lines.join("\n"));
+    // The updater takes the request and reports that the package did not install.
+    (await import("node:fs")).rmSync(request);
+    writeFileSync(macUpdater.result, JSON.stringify({ at: new Date().toISOString(), version: "0.99.0", installed: false, reason: "the installer's signature is not valid" }));
+    await service.maintainNow();
+    assert.equal(failedUpdate(dir)?.version, "0.99.0", "recorded as a failed update");
+    assert.equal(existsSync(request), false);
+    assert.deepEqual(requests(), [], "and not asked again within the hour");
+  } finally { await service.stop(); }
+});

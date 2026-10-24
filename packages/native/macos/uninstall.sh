@@ -5,10 +5,12 @@
 #
 # First the agent's own uninstall, as the person removing it: the agent stopped, the hook taken out of the coding
 # agents' settings and the workspace told (with --purge, the person's Scopebond folder goes too). Then the agent launchd
-# runs for each person signed in is stopped, and the package's files and its receipt are removed. A workspace that could
+# runs for each person signed in is stopped, then the package's updater, and the package's files and its receipt are
+# removed. A workspace that could
 # not be told within a few seconds is said, the removal goes on, and the exit code is 75 instead of 0.
 set -u
 LABEL=com.scopebond.agent
+UPDATER=com.scopebond.updater
 PACKAGE_ID=com.scopebond.agent
 EXE=/usr/local/bin/scopebond-agent
 PLIST="/Library/LaunchAgents/$LABEL.plist"
@@ -46,7 +48,9 @@ for uid in $(/bin/ps -axo uid=,comm= | /usr/bin/awk '$1 != 0 && $2 ~ /\/loginwin
   /bin/launchctl enable "gui/$uid/$LABEL" 2>/dev/null || true
 done
 
-/bin/rm -f "$EXE" "$PLIST"
+/bin/launchctl bootout "system/$UPDATER" 2>/dev/null || true
+
+/bin/rm -f "$EXE" "$PLIST" "/Library/LaunchDaemons/$UPDATER.plist" /Library/Logs/Scopebond-updater.log
 /bin/rm -rf "$SUPPORT"
 /usr/sbin/pkgutil --forget "$PACKAGE_ID" >/dev/null 2>&1 || true
 echo "Removed the Scopebond Agent ($EXE and its LaunchAgent)."
