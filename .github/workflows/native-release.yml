@@ -61,6 +61,7 @@ on:
       - packages/native/defender-scan.ps1
       - packages/native/wix/**
       - packages/native/build-pkg.mjs
+      - packages/native/version.mjs
       - packages/native/macos/**
       - packages/native/test/pkg.test.mjs
 
@@ -481,8 +482,7 @@ jobs:
           sparse-checkout: |
             packages/agent/package.json
             packages/native/build-pkg.mjs
-            packages/native/build-msi.mjs
-            packages/native/icon.mjs
+            packages/native/version.mjs
             packages/native/macos
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
