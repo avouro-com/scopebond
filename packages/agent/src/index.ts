@@ -16,10 +16,12 @@ export { runUpkeepApart, upkeepCommand, UPKEEP_BUDGET_MS, UPKEEP_TIMEOUT_MS } fr
 export type { UpkeepReport, UpkeepApartOptions } from "./upkeep.js";
 export { startControl, callAgent, readEndpoint, localSocketPath, AGENT_FILE, TOKEN_HEADER } from "./ipc.js";
 export type { AgentEndpoint } from "./ipc.js";
+export type { LaunchctlRunner, MacPackage } from "./autostart.js";
 export {
   launcherPath, windowsLauncher, posixLauncher, windowsRunCommand, macLaunchAgent, linuxUserUnit,
   enableAutostart, disableAutostart, autostartHealth, autostartPaths, startCommands, startNow, LABEL,
   AGENT_LOG_ENV, LAUNCHER_MARK, launcherIsCurrent, refreshLauncher, retireLauncherRunValue, TRAY_RUN_VALUE,
+  MAC_PACKAGE_PLIST, macPackage, macLabelDisabled,
 } from "./autostart.js";
 export {
   agentVersion, fetchClientVersion, compareVersions, commandHookVersion, maintainedHookCommand, maintainHookEntries, installAgent, ownNpm,
@@ -47,7 +49,7 @@ export {
 export type { InstallKind, InstallResult, ReleaseManifest, UpdaterKey, VerifiedInstaller, HelperPlan } from "./native-update.js";
 export { runUpdateHelper, helperInput, UPDATE_START_DEADLINE_MS } from "./update-helper.js";
 export type { HelperInput, HelperDeps } from "./update-helper.js";
-export { installedWorkspace, installedKey, connectWithInstallKey, httpsOrigin, startFirstSignIn, DEFAULT_WORKSPACE, SETTINGS_KEYS, FIRST_SIGNIN_FILE, INSTALL_KEY_VALUE } from "./signin.js";
+export { installedWorkspace, installedKey, connectWithInstallKey, httpsOrigin, startFirstSignIn, readInstallerSetting, DEFAULT_WORKSPACE, SETTINGS_KEYS, MAC_SETTINGS_DOMAINS, INSTALLER_SETTINGS, FIRST_SIGNIN_FILE, INSTALL_KEY_VALUE } from "./signin.js";
 export type { RegistryReader, FirstSignIn, FirstSignInOptions } from "./signin.js";
 export { findNpmInstall, hasNpmInstall, migrateFromNpm, isNpmLauncher, readMigration, MIGRATED_FILE } from "./migrate.js";
 export type { NpmInstall, MigrateDeps, Migration } from "./migrate.js";

@@ -1,5 +1,6 @@
 // A signed install that was never connected signs in with no terminal: the workspace the installer named (HKLM, then
-// HKCU, else Scopebond Cloud; https only), the approval page opened on that workspace only, the code in the tray, and once
+// HKCU on Windows; a configuration profile, the machine's preferences, then this user's on macOS; else Scopebond Cloud;
+// https only), the approval page opened on that workspace only, the code in the tray, and once
 // approved the rest of a first-time setup (hook entries, autostart). On its very first start it does this by itself, once.
 // HOME, USERPROFILE and SCOPEBOND_HOME point at temporary folders; the workspace is the fake cloud; autostart and the
 // browser are stand-ins.
@@ -215,4 +216,47 @@ test("a company-wide install connects with its install key, with no code; a refu
     const full = await connectWithInstallKey(mkdtempSync(join(root, "home-key3-")), origin, "sbk_fake_full_" + "k".repeat(20), { fetchImpl, harnesses: [] });
     assert.match(full.ok ? "" : full.error, /as many computers as it allows today/);
   } finally { await cloud.close(); }
+});
+
+test("macOS: the workspace and install key from a configuration profile, then the machine's preferences, then this user's", async () => {
+  const { installedKey, MAC_SETTINGS_DOMAINS, INSTALLER_SETTINGS } = await import("../dist/index.js");
+  const [managed, machine, user] = MAC_SETTINGS_DOMAINS;
+  assert.deepEqual(MAC_SETTINGS_DOMAINS, ["/Library/Managed Preferences/com.scopebond.agent", "/Library/Preferences/com.scopebond.agent", "~/Library/Preferences/com.scopebond.agent"]);
+  // Each platform's machine-wide places come before any person's.
+  assert.deepEqual(INSTALLER_SETTINGS, [HKLM, managed, machine, HKCU, user]);
+  const settings = (values) => (key, name) => values[key]?.[name] ?? null;
+  assert.deepEqual(installedWorkspace(settings({ [user]: { Workspace: "https://mine.example.test" } })), { origin: "https://mine.example.test", from: user });
+  assert.deepEqual(installedWorkspace(settings({ [user]: { Workspace: "https://mine.example.test" }, [machine]: { Workspace: "https://acme.example.test" } })), { origin: "https://acme.example.test", from: machine });
+  assert.deepEqual(installedWorkspace(settings({ [machine]: { Workspace: "https://local.example.test" }, [managed]: { Workspace: "https://mdm.example.test/x" } })), { origin: "https://mdm.example.test", from: managed }, "the profile a device management service installed wins");
+  assert.match(installedWorkspace(settings({ [managed]: { Workspace: "http://mdm.example.test" } })).error ?? "", /not an https address/);
+  const good = "sbk_" + "c".repeat(43);
+  assert.deepEqual(installedKey(settings({ [managed]: { InstallKey: good }, [user]: { InstallKey: "sbk_" + "d".repeat(43) } })), { key: good, from: managed });
+});
+
+test("each platform reads only its own settings, and never starts a program for another platform's", async () => {
+  const { readInstallerSetting } = await import("../dist/index.js");
+  assert.equal(readInstallerSetting("/Library/Preferences/com.scopebond.agent", "Workspace", "win32"), null);
+  assert.equal(readInstallerSetting(HKLM, "Workspace", "darwin"), null);
+  assert.equal(readInstallerSetting("/Library/Preferences/com.scopebond.agent", "Workspace", "linux"), null);
+});
+
+test("macOS: a preference is read from its file: a string value, never another type", { skip: process.platform !== "darwin" && "macOS preferences" }, async () => {
+  const { writeFileSync } = await import("node:fs");
+  const { readInstallerSetting, MAC_SETTINGS_DOMAINS } = await import("../dist/index.js");
+  const user = MAC_SETTINGS_DOMAINS[2];
+  assert.equal(readInstallerSetting(user, "Workspace"), null, "nothing set yet");
+  // HOME is this test's own folder, so ~/Library/Preferences is too: the file `defaults write` or a profile leaves.
+  const dir = join(userHome, "Library", "Preferences");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "com.scopebond.agent.plist"), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Workspace</key><string>https://mine.example.test/a?b=1&amp;c=2</string>
+  <key>InstallKey</key><integer>7</integer>
+</dict></plist>
+`);
+  assert.equal(readInstallerSetting(user, "Workspace"), "https://mine.example.test/a?b=1&c=2");
+  assert.equal(readInstallerSetting(user, "InstallKey"), null, "not a string");
+  assert.equal(readInstallerSetting(user, "Other"), null, "not there");
+  assert.deepEqual(installedWorkspace(), { origin: "https://mine.example.test", from: user }, "the default reader");
 });

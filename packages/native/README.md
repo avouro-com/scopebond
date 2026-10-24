@@ -54,11 +54,15 @@ hand. The build fails when the commit's `packages/agent` is not the version it w
    exactly `Avouro LLC`, the rule the updater uses), `SHA256SUMS`, the signed release manifest (the run fails without
    `UPDATER_SIGNING_KEY`), the winget manifests and a build provenance attestation (`gh attestation verify <file> --repo
    avouro-com/scopebond`).
-5. **sign-macos**: the Apple build, in its own `signing-apple` environment: the executable (Developer ID, hardened
-   runtime, notarized), and the installer package around it (`build-pkg.mjs`) signed with the Developer ID Installer
-   identity (`APPLE_INSTALLER_IDENTITY`, its certificate in `APPLE_INSTALLER_CERTIFICATE_P12`), notarized
-   (`notarytool submit --wait`) and stapled. Off until `APPLE_SIGNING_ENABLED` is set with the Apple secrets.
-6. **release**: a draft, pre-release GitHub release with the signed files, for a person to check and publish.
+5. **build-macos** (macos-latest for Apple silicon, macos-15-intel for Intel; no secrets): the executable and the
+   installer package around it, unsigned, installed and removed again on the runner (`test/pkg.test.mjs`).
+6. **sign-macos**, in its own `signing-apple` environment, for each architecture: the executable built above, signed
+   with the Developer ID (hardened runtime) and notarized, then the installer package built around it again
+   (`build-pkg.mjs`), signed with the Developer ID Installer identity (`APPLE_INSTALLER_IDENTITY`, its certificate in
+   `APPLE_INSTALLER_CERTIFICATE_P12`), notarized (`notarytool submit --wait`) and stapled. Nothing is installed there:
+   only Apple's tools and Node with the package script. Off until `APPLE_SIGNING_ENABLED` is set with the Apple secrets.
+7. **release**: a draft, pre-release GitHub release with the signed files, for a person to check and publish; with the
+   macOS packages and executables too once Apple signing is on.
 
 A fork can run the build job and gets an unsigned file; it cannot reach either signing environment.
 
@@ -119,7 +123,8 @@ workspace is kept.
 Apple's `pkgbuild` and `productbuild`, around the executable as given (`build-sea.mjs` signs it ad hoc; the release signs
 it with the Developer ID first). With `APPLE_INSTALLER_IDENTITY` set, the package is signed with that Developer ID
 Installer identity and timestamped; without it, it is unsigned, as the Windows build job's files are. It is for the
-architecture of the Node that built the executable, on macOS 11 or later. The package:
+architecture of the Node that built the executable (the release builds one for Apple silicon and one for Intel), on
+macOS 11 or later. The package:
 
 - installs for every user of the Mac (an administrator's password): `/usr/local/bin/scopebond-agent`, on PATH in every
   new terminal; the folders on the way keep the owner and mode they already have;
@@ -128,8 +133,11 @@ architecture of the Node that built the executable, on macOS 11 or later. The pa
   not. Its label is the agent's own autostart label, so launchd never runs a second agent beside it;
 - before an upgrade stops the agent for everyone signed in, and afterwards starts the new one for them (a person for whom
   launchd has the label disabled stays without it); an install with nobody signed in starts it at the next sign-in;
-- on the first start, as after the Windows installer, signs a never-connected computer in to Scopebond Cloud (the
-  approval page opens in the browser); `scopebond-agent setup <workspace-url>` connects to another workspace;
+- on the first start, as after the Windows installer, signs a never-connected computer in to the workspace named by the
+  `Workspace` preference of `com.scopebond.agent` (a configuration profile, `sudo defaults write
+  /Library/Preferences/com.scopebond.agent Workspace https://…`, or the person's own), with `InstallKey` there connecting
+  without a code; else to Scopebond Cloud (the approval page opens in the browser). `scopebond-agent setup
+  <workspace-url>` connects to another workspace;
 - is removed with `sudo "/Library/Application Support/Scopebond/uninstall.sh"`: first `scopebond-agent uninstall` as the
   person removing it (the agent stopped, the hook taken out of the coding agents' settings and the workspace told; with
   `--purge`, `uninstall --purge`, and the Scopebond folder goes too), then the agent stopped for everyone signed in, the
