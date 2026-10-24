@@ -860,7 +860,11 @@ export function hookCommandResolves(command: string): boolean {
     if (!existsSync(candidate)) return false;
   }
   // A bare `node cli.js` form on POSIX has no .exe to check; the .js still counted.
-  return checked > 0 || !/[\\/]/.test(command.split(/\s+/)[0] ?? "");
+  if (checked > 0) return true;
+  // The signed single executable on macOS or Linux (`"/…/scopebond-agent" hook claude`) has no extension: the program
+  // itself must exist.
+  const program = (tokens[0] ?? "").replace(/^"|"$/g, "");
+  return /[\\/]/.test(program) ? existsSync(program) : true;
 }
 
 /** Remove the user-level home (keys, policy, receipts). */

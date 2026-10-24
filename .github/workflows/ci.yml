@@ -107,6 +107,11 @@ jobs:
         run: pnpm -r build
       - name: Hook and agent tests
         run: pnpm --filter @scopebond/hook --filter @scopebond/agent test
+      # The macOS single executable: it must carry a signature (Apple silicon kills unsigned code) and decide as the hook.
+      - name: Build and run the single executable
+        run: node --test packages/native/test/sea.test.mjs
+        env:
+          SCOPEBOND_SEA: "1"
 
   # The clean-machine Windows journey (powershell.exe, pwsh.exe, a standard user), one job each,
   # in parallel with everything else. It packs the hook and agent itself.
