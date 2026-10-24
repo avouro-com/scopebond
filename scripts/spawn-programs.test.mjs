@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 
 const packages = fileURLToPath(new URL("../packages/", import.meta.url));
 const SHIPPED = ["agent", "framework", "gateway", "github-action", "hook", "mcp", "sdk", "verify", "policy-schema"];
-const POSIX_ONLY = new Set(["launchctl", "systemctl", "osascript", "zenity", "notify-send", "open", "xdg-open", "/bin/sh"]);
+const POSIX_ONLY = new Set(["launchctl", "systemctl", "osascript", "zenity", "notify-send", "open", "xdg-open", "/bin/sh", "/bin/launchctl", "/usr/bin/plutil"]);
 // A call to a child_process function (or a local `run` wrapper) and the text of its first argument. The program is a
 // string literal when that argument is one, or is a conditional on a plain name with literal branches:
 // `spawn("git", …)`, `spawn(win ? "npm.cmd" : "npm", …)`.

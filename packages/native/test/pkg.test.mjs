@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { FIRST_SIGNIN_FILE, LABEL, MAC_PACKAGE_EXE, MAC_PACKAGE_UNINSTALL } from "@scopebond/agent";
 import { buildSea } from "../build-sea.mjs";
 import { buildPkg, distributionXml, MIN_MACOS, PACKAGE_ID, PAYLOAD } from "../build-pkg.mjs";
-import { installerVersion } from "../build-msi.mjs";
+import { installerVersion } from "../version.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const macos = join(here, "..", "macos");
