@@ -8,8 +8,11 @@ name: Native release (signed)
 #   installer  the installer built around the signed programs (WiX), with no secrets and no OIDC token
 #   sign-installer  the installer signed (the `signing` environment again), then every file verified, summed, the
 #              release manifest signed (required) and everything attested
-#   sign-macos the Apple build (Developer ID + notarization): the executable, and the installer package signed with the
-#              Developer ID Installer identity, notarized and stapled; designed in and off until its secrets exist
+#   build-macos  the macOS executable and installer package, for Apple silicon and Intel, with no secrets (unsigned; the
+#              package is installed and removed on the runner)
+#   sign-macos the Apple signing of what build-macos built (Developer ID + notarization): the executable, and the
+#              installer package signed with the Developer ID Installer identity, notarized and stapled; off until its
+#              secrets exist
 #   defender-scan  the signed files scanned by Microsoft Defender on current definitions; a detection stops the release
 #   release    a draft GitHub release with the signed files, for a person to check and publish
 #
@@ -22,8 +25,8 @@ name: Native release (signed)
 # a person to check and publish.
 #
 # A pull request that touches this workflow or the release-only tooling in packages/native (version stamping, SBOM,
-# icon, manifests, the installer definition) runs the `build` job alone (no secrets, no `signing`): a step that would
-# break the release fails on the pull request instead. Other changes to packages/native and packages/tray are built and
+# icon, manifests, the installer definitions) runs the `build` and `build-macos` jobs alone (no secrets, no `signing`):
+# a step that would break the release fails on the pull request instead. Other changes to packages/native and packages/tray are built and
 # run on every pull request by ci.yml (single executable, MSI) and tray.yml (the tray's release build), so this build
 # would only repeat them.
 
@@ -57,6 +60,10 @@ on:
       - packages/native/verify-signed.ps1
       - packages/native/defender-scan.ps1
       - packages/native/wix/**
+      - packages/native/build-pkg.mjs
+      - packages/native/version.mjs
+      - packages/native/macos/**
+      - packages/native/test/pkg.test.mjs
 
 permissions: {}
 
@@ -387,33 +394,107 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # The Apple build: a Developer ID signed, hardened-runtime and notarized executable, and the installer package around it
-  # (packages/native/build-pkg.mjs) signed with the Developer ID Installer identity, notarized and stapled; separate from
-  # Artifact Signing. Off until the owner adds the Apple secrets to the `signing-apple` environment and sets
-  # APPLE_SIGNING_ENABLED. Without them the package is built unsigned by ci.yml's test-macos job, as a fork's would be.
-  sign-macos:
-    name: sign (macos)
-    if: github.repository == 'avouro-com/scopebond' && github.ref == 'refs/heads/main' && vars.APPLE_SIGNING_ENABLED == 'true'
-    runs-on: macos-latest
-    environment: signing-apple
+  # The macOS build, for Apple silicon and Intel, with no secrets (any fork can run this job and gets unsigned files, as
+  # from the Windows build job): the single executable (ad-hoc signed, as Apple silicon requires), and the installer
+  # package around it (build-pkg.mjs), installed and removed again on the throwaway runner (test/pkg.test.mjs).
+  build-macos:
+    name: build (macos ${{ matrix.arch }})
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-latest
+          - arch: x86_64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
     permissions:
-      contents: read # check out the source the installer is built from
-      id-token: write # sign in to Azure (Artifact Signing) and sign the provenance attestation
-      attestations: write # record the build provenance attestation
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      # No dependency cache: a release build starts from the lockfile alone.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22.20.0
+      - name: Version
+        env:
+          WANTED: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          v="$(node -p 'require("./packages/agent/package.json").version')"
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "packages/agent/package.json has no release version: $v" >&2; exit 1; }
+          if [ -n "$WANTED" ] && [ "$WANTED" != "$v" ]; then echo "asked to build the agent $WANTED, but this commit's packages/agent is $v" >&2; exit 1; fi
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
       - name: Build the single executable
         run: node packages/native/build-sea.mjs
-      - name: Sign (Developer ID, hardened runtime) and notarize
+      - name: It is for this architecture, signed ad hoc, and runs
         env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          exe=packages/native/build/scopebond-agent
+          test "$(lipo -archs "$exe")" = "$ARCH"
+          codesign --verify --strict "$exe"
+          "$exe" --version
+      - name: Build, install and remove the installer package
+        run: node --test packages/native/test/pkg.test.mjs
+        env:
+          SCOPEBOND_PKG: "1"
+          SCOPEBOND_PKG_INSTALL: "1"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned-macos-${{ matrix.arch }}
+          path: |
+            packages/native/build/scopebond-agent
+            packages/native/build/scopebond-agent-*.pkg
+          if-no-files-found: error
+          retention-days: 7
+
+  # The Apple signing of what build-macos built: the executable signed with the Developer ID (hardened runtime) and
+  # notarized, then the installer package built around it again, signed with the Developer ID Installer identity,
+  # notarized and stapled. Nothing is installed here: no dependency and no build tool, only Apple's own tools and the
+  # package script with Node. Off until the owner adds the Apple secrets to the `signing-apple` environment and sets
+  # APPLE_SIGNING_ENABLED.
+  sign-macos:
+    name: sign (macos ${{ matrix.arch }})
+    needs: build-macos
+    if: github.repository == 'avouro-com/scopebond' && github.ref == 'refs/heads/main' && vars.APPLE_SIGNING_ENABLED == 'true'
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-latest
+          - arch: x86_64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    environment: signing-apple
+    permissions:
+      contents: read # check out the package script the installer is built with
+      id-token: write # sign the provenance attestation
+      attestations: write # record the build provenance attestation
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            packages/agent/package.json
+            packages/native/build-pkg.mjs
+            packages/native/version.mjs
+            packages/native/macos
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.20.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: unsigned-macos-${{ matrix.arch }}
+          path: packages/native/build
+      - name: Sign (Developer ID, hardened runtime) and notarize the executable
+        env:
+          ARCH: ${{ matrix.arch }}
           APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
@@ -422,6 +503,11 @@ jobs:
           APPLE_NOTARY_ISSUER: ${{ vars.APPLE_NOTARY_ISSUER }}
         run: |
           set -euo pipefail
+          exe=packages/native/build/scopebond-agent
+          # An artifact keeps no file modes; the unsigned package from the build job is replaced below.
+          chmod 755 "$exe"
+          rm -f packages/native/build/scopebond-agent-*.pkg
+          test "$(lipo -archs "$exe")" = "$ARCH"
           keychain="$RUNNER_TEMP/signing.keychain-db"
           security create-keychain -p "" "$keychain"
           security set-keychain-settings -lut 3600 "$keychain"
@@ -438,12 +524,12 @@ jobs:
             <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
           </dict></plist>
           PLIST
-          exe=packages/native/build/scopebond-agent
           codesign --force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp --entitlements "$RUNNER_TEMP/entitlements.plist" "$exe"
           codesign --verify --strict --verbose=2 "$exe"
-          ditto -c -k --keepParent "$exe" scopebond-agent-macos.zip
+          "$exe" --version
+          ditto -c -k --keepParent "$exe" "scopebond-agent-macos-$ARCH.zip"
           echo "$APPLE_NOTARY_KEY" > "$RUNNER_TEMP/notary.p8"
-          xcrun notarytool submit scopebond-agent-macos.zip --key "$RUNNER_TEMP/notary.p8" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER" --wait
+          xcrun notarytool submit "scopebond-agent-macos-$ARCH.zip" --key "$RUNNER_TEMP/notary.p8" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER" --wait
       # The installer package around the signed executable: signed by the Developer ID Installer identity (a certificate
       # of its own, in the same keychain), notarized, and the ticket stapled so Gatekeeper accepts it offline.
       - name: Build, sign, notarize and staple the installer package
@@ -471,13 +557,13 @@ jobs:
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            scopebond-agent-macos.zip
+            scopebond-agent-macos-${{ matrix.arch }}.zip
             scopebond-agent-*.pkg
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: signed-macos
+          name: signed-macos-${{ matrix.arch }}
           path: |
-            scopebond-agent-macos.zip
+            scopebond-agent-macos-${{ matrix.arch }}.zip
             scopebond-agent-*.pkg
           if-no-files-found: error
           retention-days: 30
@@ -509,8 +595,13 @@ jobs:
 
   release:
     name: draft release
-    needs: [build, sign-installer, defender-scan]
-    if: github.event_name == 'workflow_dispatch' && inputs.release
+    # The macOS build must pass too. Its signed files join the release once Apple signing is on; until then sign-macos is
+    # skipped and the release is the Windows files alone.
+    needs: [build, sign-installer, defender-scan, build-macos, sign-macos]
+    if: >-
+      !cancelled() && github.event_name == 'workflow_dispatch' && inputs.release
+      && needs.build.result == 'success' && needs.sign-installer.result == 'success' && needs.defender-scan.result == 'success' && needs.build-macos.result == 'success'
+      && (needs.sign-macos.result == 'success' || needs.sign-macos.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the draft release and upload the signed files to it
@@ -519,16 +610,26 @@ jobs:
         with:
           name: signed-windows
           path: out
+      - if: needs.sign-macos.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: signed-macos-*
+          merge-multiple: true
+          path: out
       - name: Create a draft release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.build.outputs.version }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
+          MACOS: ${{ needs.sign-macos.result == 'success' }}
         run: |
           set -euo pipefail
           tag="agent-native-v${VERSION}"
-          gh release create "$tag" --repo "$REPO" --target "$SHA" --draft --prerelease \
-            --title "Scopebond Agent ${VERSION} for Windows (signed)" \
-            --notes "The Scopebond Agent and hook as one signed file, the signed Scopebond tray, and the signed installer with both (per user by default; ALLUSERS=1 for every user; the tray starts at sign-in and keeps the agent running), plus the engine bundle with its signed manifest, from which signed installs update their hook without a new installer. Avouro LLC, Azure Artifact Signing, timestamped. Check it: SHA256SUMS, the CycloneDX SBOM, and the build provenance attestation (gh attestation verify scopebond-agent-${VERSION}-x64.exe --repo ${REPO})." \
-            out/*
+          title="Scopebond Agent ${VERSION} for Windows (signed)"
+          notes="The Scopebond Agent and hook as one signed file, the signed Scopebond tray, and the signed installer with both (per user by default; ALLUSERS=1 for every user; the tray starts at sign-in and keeps the agent running), plus the engine bundle with its signed manifest, from which signed installs update their hook without a new installer. Avouro LLC, Azure Artifact Signing, timestamped. Check it: SHA256SUMS, the CycloneDX SBOM, and the build provenance attestation (gh attestation verify scopebond-agent-${VERSION}-x64.exe --repo ${REPO})."
+          if [ "$MACOS" = true ]; then
+            title="Scopebond Agent ${VERSION} for Windows and macOS (signed)"
+            notes="${notes} For macOS, for Apple silicon (arm64) and Intel (x86_64): the installer package scopebond-agent-${VERSION}-<arch>.pkg (/usr/local/bin/scopebond-agent for every user, and a LaunchAgent that starts it at each sign-in; remove it with: sudo \"/Library/Application Support/Scopebond/uninstall.sh\"), and the bare executable scopebond-agent-macos-<arch>.zip, Developer ID signed and notarized (the package stapled). Check them: spctl --assess --type install <pkg>, and gh attestation verify <file> --repo ${REPO}."
+          fi
+          gh release create "$tag" --repo "$REPO" --target "$SHA" --draft --prerelease --title "$title" --notes "$notes" out/*

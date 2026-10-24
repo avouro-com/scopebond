@@ -85,9 +85,27 @@ Node.js nor npm: one signed program is both the agent and the hook, and the Scop
 The same executable in a macOS installer package (`packages/native`, `build-pkg.mjs`): `/usr/local/bin/scopebond-agent`
 for every user of the Mac, and a LaunchAgent that runs `scopebond-agent run` as each person who signs in (the agent's own
 autostart label, so it never runs twice). It counts as installed for every user: it does not update itself, and the
-organization or person who installed it installs the next package. On its first start it signs in as after the Windows
-installer. `sudo "/Library/Application Support/Scopebond/uninstall.sh"` removes it, running `scopebond-agent uninstall`
-first as the person removing it; `--purge` removes the Scopebond folder too.
+organization or person who installed it installs the next package. `sudo "/Library/Application Support/Scopebond/uninstall.sh"`
+removes it, running `scopebond-agent uninstall` first as the person removing it; `--purge` removes the Scopebond folder
+too.
+
+- **First run.** On its first start the agent signs in as after the Windows installer. The workspace and an install key
+  come from the `Workspace` and `InstallKey` preferences of `com.scopebond.agent`, read in this order:
+  1. a configuration profile a device management service installed (`/Library/Managed Preferences`);
+  2. the machine's preferences an administrator wrote:
+
+     ```sh
+     sudo defaults write /Library/Preferences/com.scopebond.agent Workspace https://<your-workspace>
+     sudo defaults write /Library/Preferences/com.scopebond.agent InstallKey sbk_…
+     ```
+
+  3. this person's own `~/Library/Preferences/com.scopebond.agent`, which never overrides the first two.
+
+  As on Windows, only an https address is used; a value that is not one stops the sign-in. Without a workspace, the
+  agent signs in to Scopebond Cloud.
+- **Autostart.** It is the package's LaunchAgent. `autostart off` disables it for this person in launchd, and `autostart
+  on` enables it again; neither writes a LaunchAgent of the person's own (one written before the package is removed).
+  `status` reads launchd's disabled list.
 
 npm stays the way to install on Linux, and on macOS until a signed package is released:
 

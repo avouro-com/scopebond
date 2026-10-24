@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { FIRST_SIGNIN_FILE, LABEL, MAC_PACKAGE_EXE, MAC_PACKAGE_UNINSTALL } from "@scopebond/agent";
 import { buildSea } from "../build-sea.mjs";
 import { buildPkg, distributionXml, MIN_MACOS, PACKAGE_ID, PAYLOAD } from "../build-pkg.mjs";
-import { installerVersion } from "../build-msi.mjs";
+import { installerVersion } from "../version.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const macos = join(here, "..", "macos");
@@ -205,6 +205,20 @@ test("the package installs for every user and starts the agent, and its uninstal
       assert.ok(await waitFor(() => /state = running/.test(loaded(uid).stdout), 30_000), loaded(uid).stdout + loaded(uid).stderr);
       const status = spawnSync(MAC_PACKAGE_EXE, ["status", "--json"], { encoding: "utf8" });
       assert.equal(status.status, 0, status.stderr);
+      // Autostart is the package's LaunchAgent: on, off for this person in launchd, and on again, with no LaunchAgent of
+      // the person's own.
+      const autostart = () => JSON.parse(spawnSync(MAC_PACKAGE_EXE, ["status", "--json"], { encoding: "utf8" }).stdout).autostart;
+      assert.deepEqual(autostart(), { on: true, ok: true, detail: "starts with sign-in (the Scopebond package's LaunchAgent, for every user of this Mac)" });
+      const own = join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
+      const off = spawnSync(MAC_PACKAGE_EXE, ["autostart", "off"], { encoding: "utf8" });
+      assert.equal(off.status, 0, off.stderr);
+      assert.equal(autostart().on, false, off.stdout);
+      assert.ok(await waitFor(() => loaded(uid).status !== 0, 15_000), "autostart off stops the agent launchd ran");
+      const on = spawnSync(MAC_PACKAGE_EXE, ["autostart", "on"], { encoding: "utf8" });
+      assert.equal(on.status, 0, on.stderr);
+      assert.deepEqual(autostart(), { on: true, ok: true, detail: "starts with sign-in (the Scopebond package's LaunchAgent, for every user of this Mac)" });
+      assert.ok(await waitFor(() => /state = running/.test(loaded(uid).stdout), 30_000), "autostart on starts it again");
+      assert.ok(!existsSync(own), "no LaunchAgent of the person's own");
     } else console.log(`no graphical session for uid ${uid}: the LaunchAgent starts at the next sign-in, not checked here`);
   } catch (error) { removed(); throw error; }
 

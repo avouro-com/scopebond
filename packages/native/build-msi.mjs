@@ -10,10 +10,11 @@
 // CI (CI=true) a warning fails the build too; elsewhere validation needs an administrator, and WiX only warns without one.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeIcon } from "./icon.mjs";
+import { installerVersion } from "./version.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const WIX_UTIL = "WixToolset.Util.wixext/5.0.2";
@@ -33,11 +34,7 @@ export const SUPPRESSED_ICES = {
   ICE105: "WiX's CloseApplication deferred action needs system rights in an every-user install",
 };
 
-/** The installer's version: three numbers (the agent package's, unless `version` says otherwise). */
-export function installerVersion(version = JSON.parse(readFileSync(join(here, "..", "agent", "package.json"), "utf8")).version) {
-  if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`an installer version is three numbers, not ${version}`);
-  return version;
-}
+export { installerVersion };
 
 /** Build the installer. `version` replaces the agent package's version: only the upgrade test builds an older one. */
 export function buildMsi(exe = join(here, "build", "scopebond-agent.exe"), tray = process.env.SCOPEBOND_TRAY_EXE || null, { version, validate = true } = {}) {
