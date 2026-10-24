@@ -66,6 +66,8 @@ export interface UninstallOptions {
   kind: InstallKind;
   /** The agent's command as the person types it. */
   me: string;
+  /** The platform whose installer the folder sentence names (default: this one). */
+  platform?: NodeJS.Platform;
   /** Set (UNINSTALL_CALLER_ENV) when a program runs this for the person and says the folder sentence itself. */
   caller?: string;
   stopRunning: () => Promise<boolean>;
@@ -112,6 +114,6 @@ export async function runUninstall(o: UninstallOptions): Promise<number> {
   } else {
     code = run.status;
   }
-  if (!o.caller) say(folderSentence(o.dir, { exists: existsSync(o.dir), purged: o.purge, kind: o.kind, me: o.me }));
+  if (!o.caller) say(folderSentence(o.dir, { exists: existsSync(o.dir), purged: o.purge, kind: o.kind, me: o.me, platform: o.platform }));
   return code;
 }

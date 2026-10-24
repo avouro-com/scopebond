@@ -26,10 +26,14 @@ function release(k, { bytes = msi, version = VERSION, signWith = k.priv } = {}) 
 }
 const signedBy = (subject) => () => ({ valid: true, subject });
 
-test("the install kind: npm, per user, or for every user in Program Files", () => {
+test("the install kind: npm, per user, or for every user in Program Files or from the macOS package", () => {
   assert.equal(installKind("C:\\x\\node.exe", false), "npm");
   assert.equal(installKind("C:\\Users\\a\\AppData\\Local\\Programs\\Scopebond\\scopebond-agent.exe", true, "C:\\Program Files"), "per-user");
   assert.equal(installKind("C:\\Program Files\\Scopebond\\scopebond-agent.exe", true, "C:\\Program Files"), "per-machine");
+  // The macOS package installs for every user; the same executable run from anywhere else is this user's.
+  assert.equal(installKind("/usr/local/bin/scopebond-agent", true), "per-machine");
+  assert.equal(installKind("/opt/tools/scopebond-agent", true), "per-user");
+  assert.equal(installKind("/usr/local/bin/scopebond-agent", false), "npm");
 });
 
 test("a release is installed only when the manifest, the digest and the publisher all check out", async () => {

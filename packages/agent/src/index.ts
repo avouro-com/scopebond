@@ -40,7 +40,7 @@ export type { ToolId, ToolReport, McpServerReport, ToolDiscovery, DiscoveryOptio
 export { setupPlan, agentOnThisComputer, globalBinDir, onPath, addToPathCommand, nodeSupported, runSetup } from "./setup.js";
 export type { SetupState, SetupStep, SetupOptions } from "./setup.js";
 export {
-  installKind, updaterKeys, keyId, verifyManifest, fetchVerifiedInstaller, installerName, installerUnchanged, installerRecheckScript,
+  installKind, MAC_PACKAGE_EXE, updaterKeys, keyId, verifyManifest, fetchVerifiedInstaller, installerName, installerUnchanged, installerRecheckScript,
   windowsTool, installHelper, nativeTrayPath, takeInstallResult, INSTALLER_CHECK_SCRIPT, INSTALL_RESULT, MANIFEST_DOMAIN, PUBLISHER,
   updatesDir, msiLogPath, helperCopyPath, removeOldHelpers, UPDATE_HELPER_COMMAND, UPDATE_PENDING_FILE, UPDATE_PENDING_MS, writeUpdatePending, readUpdatePending, clearUpdatePending,
 } from "./native-update.js";
@@ -52,7 +52,7 @@ export type { RegistryReader, FirstSignIn, FirstSignInOptions } from "./signin.j
 export { findNpmInstall, hasNpmInstall, migrateFromNpm, isNpmLauncher, readMigration, MIGRATED_FILE } from "./migrate.js";
 export type { NpmInstall, MigrateDeps, Migration } from "./migrate.js";
 export { useNativeHookEntries, hasForeignHookEntries, missingPrograms } from "./hook-entries.js";
-export { agentCli, hookCli, setupCli, folderSentence } from "./commands.js";
+export { agentCli, hookCli, setupCli, folderSentence, MAC_PACKAGE_UNINSTALL } from "./commands.js";
 export type { CommandContext } from "./commands.js";
 export { applyToolSettings, toolSettingsReport, readToolSettingsState, TOOL_SETTINGS_STATE_FILE, TOOL_SETTINGS_SUPPORTED } from "./tool-settings.js";
 export type { ToolSettingsReport, HarnessReport, ToolSettingsRefusal } from "./tool-settings.js";

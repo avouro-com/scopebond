@@ -63,9 +63,14 @@ function inDate(key: UpdaterKey, now: number): boolean {
 
 export type InstallKind = "npm" | "per-user" | "per-machine";
 
-/** How this agent was installed: from npm, by the installer for this user, or for every user (Program Files). */
+/** Where the macOS installer package puts the executable: installed for every user of the Mac, by an administrator. */
+export const MAC_PACKAGE_EXE = "/usr/local/bin/scopebond-agent";
+
+/** How this agent was installed: from npm, by the installer for this user, or for every user (Program Files, or the macOS
+ *  package). */
 export function installKind(execPath = process.execPath, single = isSingleExecutable(), programFiles = process.env.ProgramFiles ?? "C:\\Program Files"): InstallKind {
   if (!single) return "npm";
+  if (execPath === MAC_PACKAGE_EXE) return "per-machine";
   // The folder without trailing separators (a loop, not a regular expression, on a value from the environment).
   let folder = programFiles.toLowerCase();
   while (folder.endsWith("\\") || folder.endsWith("/")) folder = folder.slice(0, -1);

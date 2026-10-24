@@ -2,7 +2,7 @@
   "name": "@scopebond/native",
   "version": "0.0.0",
   "private": true,
-  "description": "The Scopebond service and hook as one signed Windows program. Released as signed files, not on npm.",
+  "description": "The Scopebond service and hook as one signed program, with its Windows installer and macOS installer package. Released as signed files, not on npm.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",
   "type": "module",
@@ -12,6 +12,7 @@
   "scripts": {
     "build": "node -e \"\"",
     "build:sea": "node build-sea.mjs",
+    "build:pkg": "node build-pkg.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {

@@ -80,7 +80,16 @@ Node.js nor npm: one signed program is both the agent and the hook, and the Scop
   settings point at a program that is gone, and `status` and the daily self-check name that file
   (`hook_starts`). Installing Scopebond again, or taking the Scopebond entries out of those settings files, clears it.
 
-npm stays the way to install on macOS and Linux:
+## macOS: the installer package
+
+The same executable in a macOS installer package (`packages/native`, `build-pkg.mjs`): `/usr/local/bin/scopebond-agent`
+for every user of the Mac, and a LaunchAgent that runs `scopebond-agent run` as each person who signs in (the agent's own
+autostart label, so it never runs twice). It counts as installed for every user: it does not update itself, and the
+organization or person who installed it installs the next package. On its first start it signs in as after the Windows
+installer. `sudo "/Library/Application Support/Scopebond/uninstall.sh"` removes it, running `scopebond-agent uninstall`
+first as the person removing it; `--purge` removes the Scopebond folder too.
+
+npm stays the way to install on Linux, and on macOS until a signed package is released:
 
 ## Use
 

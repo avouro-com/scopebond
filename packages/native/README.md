@@ -7,7 +7,8 @@ built from `@scopebond/agent` and `@scopebond/hook`. One file is both:
 - the hook a coding agent runs for each tool call: `scopebond-agent.exe hook claude` (or `cursor`, `codex`), and every
   other hook command after `hook` (`hook init`, `hook log`, `hook rules`, …).
 
-It needs neither npm nor npx at run time, and it is the file the signed Windows installer ships.
+It needs neither npm nor npx at run time, and it is the file the signed Windows installer and the macOS installer package
+ship.
 
 ## Build
 
@@ -53,8 +54,10 @@ hand. The build fails when the commit's `packages/agent` is not the version it w
    exactly `Avouro LLC`, the rule the updater uses), `SHA256SUMS`, the signed release manifest (the run fails without
    `UPDATER_SIGNING_KEY`), the winget manifests and a build provenance attestation (`gh attestation verify <file> --repo
    avouro-com/scopebond`).
-5. **sign-macos**: the Apple build (Developer ID, hardened runtime, notarized), in its own `signing-apple` environment;
-   off until `APPLE_SIGNING_ENABLED` is set with the Apple secrets.
+5. **sign-macos**: the Apple build, in its own `signing-apple` environment: the executable (Developer ID, hardened
+   runtime, notarized), and the installer package around it (`build-pkg.mjs`) signed with the Developer ID Installer
+   identity (`APPLE_INSTALLER_IDENTITY`, its certificate in `APPLE_INSTALLER_CERTIFICATE_P12`), notarized
+   (`notarytool submit --wait`) and stapled. Off until `APPLE_SIGNING_ENABLED` is set with the Apple secrets.
 6. **release**: a draft, pre-release GitHub release with the signed files, for a person to check and publish.
 
 A fork can run the build job and gets an unsigned file; it cannot reach either signing environment.
@@ -109,6 +112,33 @@ removes it: nothing left running, no files, no Run value, no Start-menu entry. I
 as 0.6.0 was, with Node's version resource) and upgrades it while its tray and agent run: `msiexec` ends with 0 (not 3010,
 a reboot), both installed files and both running programs are the new release, Settings -> Apps lists one entry, and the
 workspace is kept.
+
+## macOS installer package
+
+`node packages/native/build-pkg.mjs [scopebond-agent]` builds `build/scopebond-agent-<version>-<arch>.pkg` on macOS with
+Apple's `pkgbuild` and `productbuild`, around the executable as given (`build-sea.mjs` signs it ad hoc; the release signs
+it with the Developer ID first). With `APPLE_INSTALLER_IDENTITY` set, the package is signed with that Developer ID
+Installer identity and timestamped; without it, it is unsigned, as the Windows build job's files are. It is for the
+architecture of the Node that built the executable, on macOS 11 or later. The package:
+
+- installs for every user of the Mac (an administrator's password): `/usr/local/bin/scopebond-agent`, on PATH in every
+  new terminal; the folders on the way keep the owner and mode they already have;
+- adds the LaunchAgent `/Library/LaunchAgents/com.scopebond.agent.plist`, which runs `scopebond-agent run` as each person
+  who signs in, with the agent's log in their Scopebond folder; a crash restarts it after 30 seconds, a clean stop does
+  not. Its label is the agent's own autostart label, so launchd never runs a second agent beside it;
+- before an upgrade stops the agent for everyone signed in, and afterwards starts the new one for them (a person for whom
+  launchd has the label disabled stays without it); an install with nobody signed in starts it at the next sign-in;
+- on the first start, as after the Windows installer, signs a never-connected computer in to Scopebond Cloud (the
+  approval page opens in the browser); `scopebond-agent setup <workspace-url>` connects to another workspace;
+- is removed with `sudo "/Library/Application Support/Scopebond/uninstall.sh"`: first `scopebond-agent uninstall` as the
+  person removing it (the agent stopped, the hook taken out of the coding agents' settings and the workspace told; with
+  `--purge`, `uninstall --purge`, and the Scopebond folder goes too), then the agent stopped for everyone signed in, the
+  files and the package's receipt (`pkgutil --forget com.scopebond.agent`). It ends with a sentence naming the Scopebond
+  folder; a workspace that could not be told is said, with exit code 75, and the removal goes on.
+
+`test/pkg.test.mjs` checks the files it is made from everywhere. With `SCOPEBOND_PKG=1` on macOS it builds the package
+and takes it apart (`pkgutil --expand-full`): the files, their owner and mode, the LaunchAgent and the scripts; with
+`SCOPEBOND_PKG_INSTALL=1` as well it installs it and removes it again (CI's `test-macos` job, on a throwaway runner).
 
 ## Updates
 
