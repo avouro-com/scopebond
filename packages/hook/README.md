@@ -190,7 +190,12 @@ change what a rule matches. Whether a matching action is blocked or only recorde
 Scopebond's own protection (its settings, keys and the agents' hook settings, and on Windows the signed
 installer's folder, `%LOCALAPPDATA%\Programs\Scopebond` or `%ProgramFiles%\Scopebond`, which a coding agent may read
 but not change or delete) is not a rule in that list: it always blocks. The folder is matched by those standard
-names, in any case and in their `%…%`, `$env:…` and short-name spellings; an install moved elsewhere is not covered. A project set up by an earlier version, whose rules were never
+names, in any case and in their `%…%`, `$env:…` and short-name spellings; an install moved elsewhere is not covered.
+It also covers the shell startup files (`.zshrc`, `.bashrc`, `.profile`, `.zshenv`, fish and PowerShell profiles,
+`/etc/profile.d`, `environment.d`), wherever they sit, since a line added there runs in every later session; edit
+those yourself. Setting `SCOPEBOND_HOME`, `SCOPEBOND_HOOK_DIR` or a coding agent's config folder for every later
+session (`setx`, `launchctl setenv`) counts as switching Scopebond off, and once your own install exists a hook
+call follows `SCOPEBOND_HOOK_DIR` only to that install or to a project folder you trusted. A project set up by an earlier version, whose rules were never
 edited, moves to recording on the first run after the update and keeps the old policy as
 `policy.previous.json`; a project with its own edits keeps blocking what it blocked.
 Each clause description is generated from the list too, so it
