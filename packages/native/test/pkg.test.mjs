@@ -20,6 +20,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const macos = join(here, "..", "macos");
 const enabled = process.platform === "darwin" && process.env.SCOPEBOND_PKG === "1";
 const read = (...p) => readFileSync(join(macos, ...p), "utf8");
+/** `s` as a regular expression that matches it literally. */
+const literal = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const sha256 = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
 const PLIST_PATH = `/Library/LaunchAgents/${LABEL}.plist`;
 const UNINSTALL_PATH = "/Library/Application Support/Scopebond/uninstall.sh";
@@ -28,7 +30,7 @@ test("the package's files agree with the agent: its path, its autostart label an
   assert.deepEqual(PAYLOAD.map((f) => `/${f.path}`), [MAC_PACKAGE_EXE, PLIST_PATH, UNINSTALL_PATH]);
   assert.equal(MAC_PACKAGE_UNINSTALL, `sudo "${UNINSTALL_PATH}"`);
   const plist = read("com.scopebond.agent.plist");
-  assert.match(plist, new RegExp(`<key>Label</key><string>${LABEL.replace(/\./g, "\\.")}</string>`));
+  assert.match(plist, new RegExp(`<key>Label</key><string>${literal(LABEL)}</string>`));
   assert.ok(plist.includes(`exec ${MAC_PACKAGE_EXE} run</string>`), "it runs the installed executable's `run`");
   for (const script of [read("scripts", "preinstall"), read("scripts", "postinstall"), read("uninstall.sh")]) {
     assert.ok(script.startsWith("#!/bin/sh\n"));
@@ -44,7 +46,7 @@ test("the package's files agree with the agent: its path, its autostart label an
 test("the Distribution: one package at the agent's version, for this architecture and macOS 11 or later", () => {
   const v = installerVersion();
   const xml = distributionXml(v, "arm64");
-  assert.match(xml, new RegExp(`<pkg-ref id="${PACKAGE_ID}" version="${v.replace(/\./g, "\\.")}" onConclusion="none">#scopebond-agent\\.pkg</pkg-ref>`));
+  assert.match(xml, new RegExp(`<pkg-ref id="${literal(PACKAGE_ID)}" version="${literal(v)}" onConclusion="none">#scopebond-agent\\.pkg</pkg-ref>`));
   assert.match(xml, /hostArchitectures="arm64"/);
   assert.match(distributionXml(v, "x64"), /hostArchitectures="x86_64"/);
   assert.match(xml, new RegExp(`<os-version min="${MIN_MACOS}"/>`));
@@ -89,15 +91,15 @@ test("the package installs the executable, the LaunchAgent and the uninstall scr
   assert.deepEqual(readdirSync(out).sort(), ["Distribution", "Resources", "scopebond-agent.pkg"]);
   // productbuild writes the Distribution again, with the sizes it measured: what the build said is still there.
   const distribution = readFileSync(join(out, "Distribution"), "utf8");
-  assert.match(distribution, new RegExp(`<pkg-ref id="${PACKAGE_ID}" version="${v.replace(/\./g, "\\.")}" onConclusion="none"[^>]*>#scopebond-agent\\.pkg</pkg-ref>`));
+  assert.match(distribution, new RegExp(`<pkg-ref id="${literal(PACKAGE_ID)}" version="${literal(v)}" onConclusion="none"[^>]*>#scopebond-agent\\.pkg</pkg-ref>`));
   assert.match(distribution, new RegExp(`hostArchitectures="${process.arch === "arm64" ? "arm64" : "x86_64"}"`));
   assert.match(distribution, /customize="never" require-scripts="true"/);
   assert.match(distribution, /<conclusion file="conclusion\.txt" mime-type="text\/plain"\/>/);
   assert.equal(readFileSync(join(out, "Resources", "conclusion.txt"), "utf8"), read("conclusion.txt"));
   const component = join(out, "scopebond-agent.pkg");
   const info = readFileSync(join(component, "PackageInfo"), "utf8");
-  assert.match(info, new RegExp(`identifier="${PACKAGE_ID}"`));
-  assert.match(info, new RegExp(`version="${v.replace(/\./g, "\\.")}"`));
+  assert.match(info, new RegExp(`identifier="${literal(PACKAGE_ID)}"`));
+  assert.match(info, new RegExp(`version="${literal(v)}"`));
   assert.match(info, /install-location="\/"/);
   assert.match(info, /overwrite-permissions="false"/, "existing folders keep their owner and mode");
   assert.match(info, /relocatable="false"/);
