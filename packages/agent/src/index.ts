@@ -37,7 +37,7 @@ export {
   discoverTools, toolLines, TOOL_IDS, TOOL_LABELS, NPM_PACKAGES, VERSION_PROGRAMS, MAX_TOOLS, MAX_MCP_SERVERS, MAX_MCP_NAME,
 } from "./tools.js";
 export type { ToolId, ToolReport, McpServerReport, ToolDiscovery, DiscoveryOptions } from "./tools.js";
-export { setupPlan, agentOnThisComputer, globalBinDir, onPath, addToPathCommand, nodeSupported, runSetup } from "./setup.js";
+export { setupPlan, otherWorkspace, workspaceFlag, agentOnThisComputer, globalBinDir, onPath, addToPathCommand, nodeSupported, runSetup } from "./setup.js";
 export type { SetupState, SetupStep, SetupOptions } from "./setup.js";
 export {
   installKind, MAC_PACKAGE_EXE, updaterKeys, keyId, verifyManifest, fetchVerifiedInstaller, installerName, installerUnchanged, installerRecheckScript,

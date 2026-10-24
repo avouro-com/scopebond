@@ -25,6 +25,8 @@ export type SetupStep = "login" | "install_agent" | "autostart";
 export interface SetupState {
   /** The workspace origin this computer's user-level connection points at, if any. */
   connectedTo: string | null;
+  /** The workspace that connection belongs to (its id), if the connection names one. One address serves many workspaces. */
+  workspaceId?: string | null;
   /** The workspace refused that connection's credential (it must sign in again). */
   credentialRefused: boolean;
   /** The agent version installed for this user with npm, if any. */
@@ -35,13 +37,24 @@ export interface SetupState {
 
 /** What a setup run has to do, given what is already true. Pure, so a second run is provably a no-op
  *  (or a repair) rather than a second sign-in or install. */
-export function setupPlan(state: SetupState, origin: string, version: string, relogin = false): SetupStep[] {
+export function setupPlan(state: SetupState, origin: string, version: string, relogin = false, workspace: string | null = null): SetupStep[] {
   const steps: SetupStep[] = [];
-  if (relogin || state.connectedTo !== origin || state.credentialRefused) steps.push("login");
+  if (relogin || state.connectedTo !== origin || state.credentialRefused || otherWorkspace(state, workspace)) steps.push("login");
   const install = state.installedVersion === null || compareVersions(state.installedVersion, version) < 0;
   if (install) steps.push("install_agent");
   if (install || !state.autostartOk) steps.push("autostart");
   return steps;
+}
+
+/** The command named a workspace (`--workspace=<id>`) other than the one this computer is connected to. A connection that
+ *  names no workspace (made before connections kept it) cannot be matched, so it signs in once to the one named. */
+export const otherWorkspace = (state: Pick<SetupState, "workspaceId">, workspace: string | null): boolean =>
+  workspace !== null && state.workspaceId !== workspace;
+
+/** A workspace id as `--workspace=<id>` gives it, or null when absent or malformed. */
+export function workspaceFlag(args: readonly string[]): string | null {
+  const value = args.find((a) => a.startsWith("--workspace="))?.slice("--workspace=".length) ?? "";
+  return /^[A-Za-z0-9_-]{1,64}$/.test(value) ? value : null;
 }
 
 export function nodeSupported(version = process.versions.node): boolean {
@@ -98,7 +111,9 @@ export function agentOnThisComputer(single: boolean, version: string, fromNpm: (
   return single ? { prefix: null, cli: self(), version } : fromNpm();
 }
 
-export interface SetupOptions { dir: string; origin: string; harness: Harness; relogin: boolean; version: string; me: string }
+export interface SetupOptions { dir: string; origin: string; harness: Harness; relogin: boolean; version: string; me: string;
+  /** The workspace the command was made for (`--workspace=<id>`, the portal's Add an agent command); null when not given. */
+  workspace?: string | null }
 
 export async function runSetup(o: SetupOptions): Promise<number> {
   const say = (line: string) => console.log(line);
@@ -117,15 +132,20 @@ export async function runSetup(o: SetupOptions): Promise<number> {
   const global = agentOnThisComputer(single, o.version);
   const state: SetupState = {
     connectedTo,
+    workspaceId: connection?.organization_id ?? null,
     credentialRefused: readDeliveryState(o.dir).invalid_since != null,
     installedVersion: global.version,
     autostartOk: autostartHealth(o.dir).ok,
   };
-  const steps = setupPlan(state, o.origin, o.version, o.relogin);
+  const steps = setupPlan(state, o.origin, o.version, o.relogin, o.workspace ?? null);
   say(`Setting up Scopebond for this user (${steps.length ? steps.join(", ").replace(/_/g, " ") : "nothing missing"}).`);
 
   // 1. Sign in with a code. The hook's own login prints the link and code and waits for approval.
   if (steps.includes("login")) {
+    // One address serves every workspace, so a computer connected to another one is signed in to the one asked for.
+    if (!o.relogin && state.connectedTo === o.origin && !state.credentialRefused && otherWorkspace(state, o.workspace ?? null)) {
+      say("This computer is connected to another workspace. Signing in to the one this command was made for.");
+    }
     const flag = o.harness === "claude" ? "--claude" : `--${o.harness}`;
     // From the home folder, so a project's own setup in the current folder can never take the sign-in;
     // and a failed sign-in names this setup command, which also installs and starts the agent.

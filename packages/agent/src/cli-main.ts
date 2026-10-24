@@ -1,6 +1,6 @@
 // scopebond-agent: run, look at and control the Scopebond Agent for this user.
 //
-//   scopebond-agent setup <workspace-url> [--claude|--cursor|--codex] [--relogin]
+//   scopebond-agent setup <workspace-url> [--claude|--cursor|--codex] [--workspace=<id>] [--relogin]
 //                                       one command to start: sign in, install, autostart, status
 //   scopebond-agent run                 run in the foreground (what autostart starts)
 //   scopebond-agent status [--json]     what the running agent reports, or why it is not running
@@ -20,7 +20,7 @@ import { integrationHealth, type IntegrationHealth } from "./integration-health.
 import { AGENT_LOG_ENV, autostartHealth, disableAutostart, enableAutostart, startNow } from "./autostart.js";
 import { callAgent } from "./ipc.js";
 import { agentCliPath } from "./self.js";
-import { runSetup } from "./setup.js";
+import { runSetup, workspaceFlag } from "./setup.js";
 import { agentVersion } from "./update.js";
 import { writeOutputTo } from "./log-file.js";
 import { refreshAppsEntry, writeAppsEntry } from "./apps-entry.js";
@@ -152,7 +152,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         return;
       }
       const harness = rest.includes("--cursor") ? "cursor" : rest.includes("--codex") ? "codex" : "claude";
-      process.exitCode = await runSetup({ dir, origin, harness, relogin: rest.includes("--relogin"), version: agentVersion(), me });
+      process.exitCode = await runSetup({ dir, origin, harness, relogin: rest.includes("--relogin"), workspace: workspaceFlag(rest), version: agentVersion(), me });
       return;
     }
     case "stop": {

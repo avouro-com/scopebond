@@ -501,6 +501,17 @@ test("setup plans only what is missing, so a second run signs nobody in again an
   assert.deepEqual(setupPlan(done, "https://cloud.scopebond.com", "0.4.0", true), ["login"], "--relogin signs in again");
   assert.deepEqual(setupPlan({ ...done, credentialRefused: true }, "https://cloud.scopebond.com", "0.4.0"), ["login"], "a refused credential needs a new sign-in");
   assert.deepEqual(setupPlan(done, "https://eu.example.test", "0.4.0"), ["login"], "another workspace needs a sign-in there");
+  // One address serves every workspace: a command made for another workspace signs in to it; the same one changes nothing.
+  const inA = { ...done, workspaceId: "org_a" };
+  assert.deepEqual(setupPlan(inA, "https://cloud.scopebond.com", "0.4.0", false, "org_b"), ["login"], "another workspace on the same address");
+  assert.deepEqual(setupPlan(inA, "https://cloud.scopebond.com", "0.4.0", false, "org_a"), [], "the same workspace");
+  assert.deepEqual(setupPlan(inA, "https://cloud.scopebond.com", "0.4.0"), [], "no workspace named: as before");
+  assert.deepEqual(setupPlan(done, "https://cloud.scopebond.com", "0.4.0", false, "org_a"), ["login"], "a connection that names no workspace signs in once");
+  const { workspaceFlag } = await import("../dist/index.js");
+  assert.equal(workspaceFlag(["https://cloud.scopebond.com", "--workspace=org_b", "--codex"]), "org_b");
+  assert.equal(workspaceFlag(["--workspace="]), null);
+  assert.equal(workspaceFlag(["--workspace=org b;rm"]), null, "a malformed id is ignored");
+  assert.equal(workspaceFlag(["https://cloud.scopebond.com"]), null);
   assert.deepEqual(setupPlan({ ...done, autostartOk: false }, "https://cloud.scopebond.com", "0.4.0"), ["autostart"], "autostart is repaired on its own");
   assert.deepEqual(setupPlan({ ...done, installedVersion: "0.3.1" }, "https://cloud.scopebond.com", "0.4.0"), ["install_agent", "autostart"]);
   assert.deepEqual(setupPlan({ ...done, installedVersion: "0.5.0" }, "https://cloud.scopebond.com", "0.4.0"), [], "a newer installed agent is kept");
