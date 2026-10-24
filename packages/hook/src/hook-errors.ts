@@ -73,6 +73,16 @@ export function hookErrorSummary(dir: string, now = Date.now()): { last24h: numb
   return { last24h: recent.length, newest: lines.at(-1) ?? null };
 }
 
+/** The rules check's report of the hook's own failures: `<count in the last 24 h>;<newest kind>`, never a message. Sent only
+ *  when there is one; a workspace that knows the `hook_failures` capability reads its absence as none. */
+export const HOOK_FAILURES_HEADER = "x-scopebond-hook-failures";
+export const HOOK_FAILURES_CAPABILITY = "hook_failures";
+
+export function hookFailuresHeaderValue(dir: string, now = Date.now()): string | null {
+  const { last24h, newest } = hookErrorSummary(dir, now);
+  return last24h > 0 && newest ? `${last24h};${newest.kind}` : null;
+}
+
 /** The `status` / `doctor` line, or null when the hook has not failed in the last 24 hours. */
 export function hookErrorLine(dir: string, now = Date.now()): string | null {
   const { last24h, newest } = hookErrorSummary(dir, now);

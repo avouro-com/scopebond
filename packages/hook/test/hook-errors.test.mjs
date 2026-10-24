@@ -80,3 +80,26 @@ test("a fail-closed block of a Cursor hook call is recorded too", () => {
   assert.equal(lines[0].harness, "cursor");
   assert.equal(lines[0].kind, "fail_closed");
 });
+
+test("the rules check reports the last day's count and the newest kind, never the message", async () => {
+  const { policyBuilds, syncPolicy, HOOK_CAPABILITIES } = await import("../dist/index.js");
+  const { HOOK_FAILURES_HEADER, hookFailuresHeaderValue } = await import("../dist/hook-errors.js");
+  const dir = mkdtempSync(join(tmpdir(), "sb-hook-failures-"));
+  const { agentKid } = scaffold(dir, ENFORCE);
+  writeFileSync(join(dir, "cloud.json"), JSON.stringify({ url: "https://cloud.example.test", credential: "sbm_x", credential_id: "c", organization_id: "org-h", environment_id: "env-1", gateway_id: "gw-h", attester_kid: "k", scopes: [], expires_at: "2099-01-01T00:00:00Z" }));
+  const check = async () => {
+    const calls = [];
+    const fetchImpl = async (url, init = {}) => { calls.push({ url: String(url), headers: init.headers ?? {} }); return new Response(null, { status: 204 }); };
+    await syncPolicy(dir, { agentKid, hookVersion: "0.40.0", policyBuilds, fetchImpl });
+    return calls.find((c) => c.url.endsWith("/v1/policy")).headers;
+  };
+  assert.equal(hookFailuresHeaderValue(dir), null);
+  assert.equal(HOOK_FAILURES_HEADER in await check(), false, "no failure, no header");
+  const ctx = { dir, harness: "claude", version: "9.9.9" };
+  recordHookError("fail_closed", "secret path ~/projects/x failed", Date.now() - 120_000, ctx);
+  recordHookError("deadline", "no decision within 50 s", Date.now() - 60_000, ctx);
+  const headers = await check();
+  assert.equal(headers[HOOK_FAILURES_HEADER], "2;deadline");
+  assert.doesNotMatch(JSON.stringify(headers), /projects/x|no decision/, "the message stays on the computer");
+  assert.ok(HOOK_CAPABILITIES.includes("hook_failures"), "the workspace can read a missing header as none");
+});

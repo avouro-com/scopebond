@@ -37,6 +37,7 @@ import { HOOK_VERSION_HEADER, versionedFetch } from "./workspace-fetch.js";
 import { packsHeaderValue, restampPacks, syncPacks, PACK_ENGINE_HEADER, PACKS_HEADER } from "./pack-sync.js";
 import { packEngineLevel } from "./pack-store.js";
 import { fatigueHeaderValue, FATIGUE_HEADER } from "./fatigue.js";
+import { HOOK_FAILURES_CAPABILITY, HOOK_FAILURES_HEADER, hookFailuresHeaderValue } from "./hook-errors.js";
 import { removeBlocklist, syncInstallBlocklist, SAFE_INSTALL_HEADER } from "./install-verdicts.js";
 
 /** What this computer sends the workspace about its own delivery queue with each rules check, so
@@ -67,6 +68,8 @@ function deliveryHeaders(dir: string): Record<string, string> {
       ...packsHeader(dir),
       // How often the person was interrupted today: toasts and prompts, counts only (fatigue.ts).
       ...fatigueHeader(dir),
+      // Actions blocked in the last day because the hook itself failed, and the newest kind (hook-errors.ts).
+      ...hookFailuresHeader(dir),
     };
   } catch { return {}; }
 }
@@ -90,6 +93,10 @@ function rulesHeader(dir: string): Record<string, string> {
 function fatigueHeader(dir: string): Record<string, string> {
   const value = fatigueHeaderValue(dir);
   return value !== null ? { [FATIGUE_HEADER]: value } : {};
+}
+function hookFailuresHeader(dir: string): Record<string, string> {
+  const value = hookFailuresHeaderValue(dir);
+  return value !== null ? { [HOOK_FAILURES_HEADER]: value } : {};
 }
 function packsHeader(dir: string): Record<string, string> {
   const value = packsHeaderValue(dir);
@@ -120,7 +127,7 @@ import { SIGNED_ARTIFACTS_CAPABILITY, syncArtifacts } from "./signed-artifacts.j
  *  (`pack_engine_2`: a pack list's `requires_engine`, `shadow` and `killed`, and the taxonomy extension, pack-sync.ts), and the
  *  blocks the workspace keeps quiet (`quiet_patterns`: blocked without asking or a notification, tune-digest.ts), and signed
  *  artifacts for the plugin slot (`signed_artifacts_1`: a pack list's `artifacts`, signed-artifacts.ts). */
-export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms", "packs", "optional_reason", "rule_off", EXCEPTIONS_CAPABILITY, "answer_lengths", "pattern_allowances", "pack_rules", "pack_engine_2", QUIET_PATTERNS_CAPABILITY, SIGNED_ARTIFACTS_CAPABILITY] as const;
+export const HOOK_CAPABILITIES = ["allowances", "session_budgets", SERVICE_RULES_CAPABILITY, "unblock_terms", "unlimited_terms", "packs", "optional_reason", "rule_off", EXCEPTIONS_CAPABILITY, "answer_lengths", "pattern_allowances", "pack_rules", "pack_engine_2", QUIET_PATTERNS_CAPABILITY, SIGNED_ARTIFACTS_CAPABILITY, HOOK_FAILURES_CAPABILITY] as const;
 
 /** The capabilities this hook reports now: `HOOK_CAPABILITIES`, without `pack_engine_2` while the pack engine level is lowered
  *  below 2 (`SCOPEBOND_PACK_ENGINE_LEVEL`, pack-store.ts). */
