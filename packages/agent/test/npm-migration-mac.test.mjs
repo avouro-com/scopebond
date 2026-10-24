@@ -1,7 +1,7 @@
 // From an npm install to the macOS package: the npm agent is stopped through its control channel, autostart becomes the
 // package's LaunchAgent (which takes the npm agent's own LaunchAgent and launcher away), every Scopebond hook entry runs
 // the package's executable, and the person is told once how to remove the npm package. launchd and the running agent are
-// stand-ins; HOME and SCOPEBOND_HOME are temporary folders.
+// stand-ins; HOME and SCOPEBOND_HOME are temporary folders. The paths are macOS's, so it runs where they are (not Windows).
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -21,6 +21,7 @@ const { autostartPaths, findNpmInstall, hasNpmInstall, isNpmLauncher, launcherPa
 const EXE = "/usr/local/bin/scopebond-agent";
 const npmGlobal = join(root, "lib", "node_modules");
 const CLI = join(npmGlobal, "@scopebond", "agent", "dist", "cli.js");
+const mac = { skip: process.platform === "win32" && "macOS paths" };
 const NPM_HOOK = (h) => `"/opt/homebrew/bin/node" "${join(npmGlobal, "@scopebond", "hook", "dist", "cli.js")}" ${h}`;
 
 /** What an npm install left: its launcher and LaunchAgent, the package, and Claude Code's hook entry running npm's hook. */
@@ -48,7 +49,7 @@ function deps(over = {}) {
   };
 }
 
-test("an npm launcher is told from the single executable's, and names its package", () => {
+test("an npm launcher is told from the single executable's, and names its package", mac, () => {
   assert.equal(isNpmLauncher(posixLauncher("/opt/homebrew/bin/node", CLI)), true);
   assert.equal(isNpmLauncher(posixLauncher(EXE, "")), false, "the package's executable starts itself");
   assert.equal(launcherPackageDir(posixLauncher("/opt/homebrew/bin/node", CLI)), join(npmGlobal, "@scopebond", "agent"));
@@ -58,14 +59,14 @@ test("an npm launcher is told from the single executable's, and names its packag
   assert.equal(npmRemovalCommand("win32"), "npm.cmd uninstall -g @scopebond/agent");
 });
 
-test("macOS: what an npm install left is found without a registry", () => {
+test("macOS: what an npm install left is found without a registry", mac, () => {
   const dir = npmMac();
   const found = findNpmInstall(dir, deps());
   assert.deepEqual(found, { runValue: false, npmLauncher: true, npmLaunchAgent: true, appsEntry: false, uninstallScript: false, packageDir: join(npmGlobal, "@scopebond", "agent"), hookEntries: ["claude"] });
   assert.equal(hasNpmInstall(found), true);
 });
 
-test("macOS: the package takes over: npm agent stopped first, autostart the package's, hook entries moved, told once how to remove npm's", async () => {
+test("macOS: the package takes over: npm agent stopped first, autostart the package's, hook entries moved, told once how to remove npm's", mac, async () => {
   const dir = npmMac();
   const order = [];
   let running = true;
@@ -90,7 +91,7 @@ test("macOS: the package takes over: npm agent stopped first, autostart the pack
   assert.ok(!again.some((l) => l.includes("remove it with")), again.join("\n"));
 });
 
-test("macOS: an npm install of the same package as this agent's is not taken over by itself", async () => {
+test("macOS: an npm install of the same package as this agent's is not taken over by itself", mac, async () => {
   const dir = mkdtempSync(join(root, "sb-"));
   writeFileSync(launcherPath(dir, "darwin"), posixLauncher(EXE, ""), { mode: 0o700 });
   const found = findNpmInstall(dir, deps({ harnesses: () => [] }));
