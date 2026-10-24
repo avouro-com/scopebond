@@ -100,6 +100,6 @@ test("the rules check reports the last day's count and the newest kind, never th
   recordHookError("deadline", "no decision within 50 s", Date.now() - 60_000, ctx);
   const headers = await check();
   assert.equal(headers[HOOK_FAILURES_HEADER], "2;deadline");
-  assert.doesNotMatch(JSON.stringify(headers), /projects/x|no decision/, "the message stays on the computer");
+  assert.doesNotMatch(JSON.stringify(headers), /projects|no decision/, "the message stays on the computer");
   assert.ok(HOOK_CAPABILITIES.includes("hook_failures"), "the workspace can read a missing header as none");
 });
