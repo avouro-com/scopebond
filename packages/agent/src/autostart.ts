@@ -231,6 +231,32 @@ const trayFor = (platform: NodeJS.Platform) => (platform === "win32" ? nativeTra
 /** The tray's Run value set for every user (an install with ALLUSERS=1): only whoever installed it changes it. */
 const trayForEveryone = (reg: RegRunner) => reg(["query", MACHINE_RUN_KEY, "/v", TRAY_RUN_VALUE]);
 
+// The macOS installer package (packages/native) puts a LaunchAgent with this same label in /Library/LaunchAgents: launchd
+// starts the agent with every person's sign-in. Autostart then means that LaunchAgent, never a second one in the person's
+// own ~/Library/LaunchAgents; turning it off disables the label for this person in launchd, and on enables it again.
+
+/** The LaunchAgent the macOS installer package installs for every user. */
+export const MAC_PACKAGE_PLIST = `/Library/LaunchAgents/${LABEL}.plist`;
+
+/** Runs `launchctl` with these arguments: whether it succeeded, and what it printed. Tests pass their own. */
+export type LaunchctlRunner = (args: string[]) => { ok: boolean; out: string };
+const runLaunchctl: LaunchctlRunner = (args) => {
+  try { return { ok: true, out: execFileSync("/bin/launchctl", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 }) }; }
+  catch { return { ok: false, out: "" }; }
+};
+/** The package's LaunchAgent when it is installed (`plist`, else null), and how to reach launchd. */
+export interface MacPackage { plist: string | null; launchctl: LaunchctlRunner; uid: number }
+export function macPackage(platform: NodeJS.Platform = process.platform): MacPackage {
+  const plist = platform === "darwin" && existsSync(MAC_PACKAGE_PLIST) ? MAC_PACKAGE_PLIST : null;
+  return { plist, launchctl: runLaunchctl, uid: process.getuid?.() ?? -1 };
+}
+/** Whether launchd has the label disabled for this person (`launchctl print-disabled gui/<uid>`): `"label" => disabled`, or
+ *  `=> true` from older macOS. */
+export function macLabelDisabled(mac: MacPackage): boolean {
+  const out = mac.launchctl(["print-disabled", `gui/${mac.uid}`]).out;
+  return /"com\.scopebond\.agent"\s*=>\s*(?:disabled|true)/.test(out); // LABEL
+}
+
 /** The launcher's Run value is not used beside the native tray. Whether there was one to remove. */
 export function retireLauncherRunValue(reg: RegRunner = runReg): boolean {
   return reg(["query", RUN_KEY, "/v", RUN_VALUE]) && reg(["delete", RUN_KEY, "/v", RUN_VALUE, "/f"]);
@@ -261,7 +287,16 @@ export function startNow(scopebondHome: string, platform = process.platform, att
 }
 
 /** Turn autostart on for this user. Returns a one-line description of what changed. */
-export function enableAutostart(scopebondHome: string, cli: string, node = process.execPath, platform = process.platform, tray: string | null = trayFor(platform), reg: RegRunner = runReg): string {
+export function enableAutostart(scopebondHome: string, cli: string, node = process.execPath, platform = process.platform, tray: string | null = trayFor(platform), reg: RegRunner = runReg, mac: MacPackage = macPackage(platform)): string {
+  if (mac.plist) {
+    // A LaunchAgent of this person's own would be a second one with the same label: it goes, and launchd starts the
+    // package's (enabled for this person again, and started now unless it already runs).
+    rmSync(autostartPaths().macPlist, { force: true });
+    rmSync(launcherPath(scopebondHome, platform), { force: true });
+    mac.launchctl(["enable", `gui/${mac.uid}/${LABEL}`]);
+    mac.launchctl(["bootstrap", `gui/${mac.uid}`, mac.plist]);
+    return `the Scopebond package's LaunchAgent (${mac.plist}) starts the agent with your sign-in`;
+  }
   if (tray) {
     retireLauncherRunValue(reg);
     if (trayForEveryone(reg)) return "the Scopebond tray starts for every user of this computer and keeps the agent running";
@@ -290,9 +325,17 @@ export function enableAutostart(scopebondHome: string, cli: string, node = proce
   return `wrote and enabled ${paths.linuxUnit}`;
 }
 
-export function disableAutostart(scopebondHome: string, platform = process.platform, tray: string | null = trayFor(platform), reg: RegRunner = runReg): string {
+export function disableAutostart(scopebondHome: string, platform = process.platform, tray: string | null = trayFor(platform), reg: RegRunner = runReg, mac: MacPackage = macPackage(platform)): string {
   const paths = autostartPaths();
   rmSync(launcherPath(scopebondHome, platform), { force: true });
+  if (mac.plist) {
+    // Off for this person only: launchd keeps the label disabled for them (the package's own removal clears that), and
+    // the agent it runs now stops.
+    rmSync(paths.macPlist, { force: true });
+    mac.launchctl(["disable", `gui/${mac.uid}/${LABEL}`]);
+    mac.launchctl(["bootout", `gui/${mac.uid}/${LABEL}`]);
+    return `launchd no longer starts the Scopebond package's LaunchAgent at your sign-in (${agentCli("autostart on", { kind: "per-machine", platform })} turns it back on)`;
+  }
   if (tray) {
     const launcherValue = retireLauncherRunValue(reg);
     const trayValue = reg(["query", RUN_KEY, "/v", TRAY_RUN_VALUE]) && reg(["delete", RUN_KEY, "/v", TRAY_RUN_VALUE, "/f"]);
@@ -354,7 +397,12 @@ function sameLauncher(target: string, launcher: string, platform: NodeJS.Platfor
 
 /** Whether autostart is on, starts this home's launcher, and that launcher can start the agent now. An entry that starts
  *  another launcher (another home's, say, left by a test run or a second home since deleted) is not this agent starting. */
-export function autostartHealth(scopebondHome: string, platform = process.platform, tray: string | null = trayFor(platform), reg: RegRunner = runReg, readRun: RunValueReader = readRunValue): { on: boolean; ok: boolean; detail: string } {
+export function autostartHealth(scopebondHome: string, platform = process.platform, tray: string | null = trayFor(platform), reg: RegRunner = runReg, readRun: RunValueReader = readRunValue, mac: MacPackage = macPackage(platform)): { on: boolean; ok: boolean; detail: string } {
+  if (mac.plist) {
+    const fix = agentCli("autostart on", { kind: "per-machine", platform });
+    if (macLabelDisabled(mac)) return { on: false, ok: false, detail: `the agent does not start with your sign-in: it is turned off for you (run: ${fix})` };
+    return { on: true, ok: true, detail: "starts with sign-in (the Scopebond package's LaunchAgent, for every user of this Mac)" };
+  }
   if (tray) {
     const on = reg(["query", RUN_KEY, "/v", TRAY_RUN_VALUE]) || trayForEveryone(reg);
     return on

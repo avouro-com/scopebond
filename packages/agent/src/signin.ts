@@ -1,7 +1,8 @@
-// The first sign-in of a signed Windows install, with no terminal. The installer may name the workspace
-// (`msiexec … WORKSPACE=https://…`, kept as `Workspace` under HKCU, or HKLM for every user, `Software\Avouro\Scopebond`);
-// without one it is Scopebond Cloud. Only an https origin read from there is used: never a URL from a link, a
-// notification or anything else that reaches the agent.
+// The first sign-in of a signed install, with no terminal. The installer may name the workspace: on Windows
+// `msiexec … WORKSPACE=https://…`, kept as `Workspace` under HKCU, or HKLM for every user, `Software\Avouro\Scopebond`; on
+// macOS the `Workspace` preference of `com.scopebond.agent`, from a configuration profile (managed preferences), the
+// machine's preferences an administrator wrote, or this user's. Without one it is Scopebond Cloud. Only an https origin
+// read from there is used: never a URL from a link, a notification or anything else that reaches the agent.
 //
 // The agent runs the device-code sign-in itself (the same requests the hook's `login` makes): it asks the workspace for a
 // code, opens the approval page (on that workspace only), and keeps waiting for the approval in the background, while the
@@ -10,6 +11,8 @@
 // process, so no second program is left waiting when the agent stops or is updated.
 
 import { execFileSync } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   approvedWorkspaceId, automaticHarnesses, clientNameField, configuredHookCommands, connectCloud, isHarnessConfigured, loadConnection, machineIdField, observationStatus, scaffold,
   userHarnessFile, wireLifecycleHooks, writeHarnessConfig,
@@ -31,6 +34,19 @@ const WORKSPACE_VALUE = "Workspace";
 export const INSTALL_KEY_VALUE = "InstallKey";
 const INSTALL_KEY = /^sbk_[A-Za-z0-9_-]{20,96}$/;
 
+/** Where the macOS installer package's settings are read, as preference domains of `com.scopebond.agent`: a configuration
+ *  profile a device management service installed first, then the machine's preferences an administrator wrote
+ *  (`sudo defaults write /Library/Preferences/com.scopebond.agent Workspace https://…`), then this user's. Only an
+ *  administrator can write the first two, so a user's value never overrides them. */
+export const MAC_SETTINGS_DOMAINS = [
+  "/Library/Managed Preferences/com.scopebond.agent",
+  "/Library/Preferences/com.scopebond.agent",
+  "~/Library/Preferences/com.scopebond.agent",
+] as const;
+/** Every place an installer's settings can be, the machine's before the person's (each platform reads its own; the
+ *  others are never there). */
+export const INSTALLER_SETTINGS = [SETTINGS_KEYS[0], MAC_SETTINGS_DOMAINS[0], MAC_SETTINGS_DOMAINS[1], SETTINGS_KEYS[1], MAC_SETTINGS_DOMAINS[2]] as const;
+
 /** Reads one registry string value; null when it is not there. Tests pass their own. */
 export type RegistryReader = (key: string, name: string) => string | null;
 
@@ -41,6 +57,26 @@ export const readRegistryValue: RegistryReader = (key, name) => {
   catch { return null; }
   const line = out.split(/\r?\n/).find((l) => l.trim().toLowerCase().startsWith(`${name.toLowerCase()} `));
   return /^\s*\S+\s+REG_(?:EXPAND_)?SZ\s+(.*?)\s*$/.exec(line ?? "")?.[1] ?? null;
+};
+
+/** One string value of a preference domain, read from its file (`<domain>.plist`) with macOS's own `plutil` by its full
+ *  path: what a configuration profile, `defaults write` or the person put there; null when the file, the value or a
+ *  string is not there. `~` is this user's home. The file is read itself, not through the preferences cache, so a value
+ *  is never stale. */
+export const readMacPreference: RegistryReader = (domain, name) => {
+  const file = `${domain.startsWith("~/") ? join(homedir(), domain.slice(2)) : domain}.plist`;
+  let out: string;
+  try { out = execFileSync("/usr/bin/plutil", ["-extract", name, "xml1", "-o", "-", file], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 }); }
+  catch { return null; }
+  const m = /<plist[^>]*>\s*<string>([^<]*)<\/string>\s*<\/plist>/.exec(out);
+  return m ? m[1].replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&") : null;
+};
+
+/** An installer setting where this platform keeps it: the registry on Windows, preferences on macOS; null for a place
+ *  of another platform, without starting anything. */
+export const readInstallerSetting: RegistryReader = (key, name, platform: NodeJS.Platform = process.platform) => {
+  if (key.startsWith("HK")) return platform === "win32" ? readRegistryValue(key, name) : null;
+  return platform === "darwin" ? readMacPreference(key, name) : null;
 };
 
 /** The https origin of `value`, or null for anything else (another scheme, a user name or password in it, not a URL). */
@@ -54,8 +90,8 @@ export function httpsOrigin(value: string): string | null {
 
 /** The workspace the installer named (the machine's setting, then this user's), else Scopebond Cloud. A setting that is
  *  there but is not an https address is refused, not skipped: signing in somewhere else would surprise whoever set it. */
-export function installedWorkspace(read: RegistryReader = readRegistryValue): { origin: string; from: string } | { error: string } {
-  for (const key of SETTINGS_KEYS) {
+export function installedWorkspace(read: RegistryReader = readInstallerSetting): { origin: string; from: string } | { error: string } {
+  for (const key of INSTALLER_SETTINGS) {
     const value = read(key, WORKSPACE_VALUE);
     if (value === null || value.trim() === "") continue;
     const origin = httpsOrigin(value);
@@ -66,8 +102,8 @@ export function installedWorkspace(read: RegistryReader = readRegistryValue): { 
 }
 
 /** The install key the installer was given (the machine's setting, then this user's), or null. Only a well-formed key is used. */
-export function installedKey(read: RegistryReader = readRegistryValue): { key: string; from: string } | null {
-  for (const key of SETTINGS_KEYS) {
+export function installedKey(read: RegistryReader = readInstallerSetting): { key: string; from: string } | null {
+  for (const key of INSTALLER_SETTINGS) {
     const value = read(key, INSTALL_KEY_VALUE)?.trim() ?? "";
     if (INSTALL_KEY.test(value)) return { key: value, from: key };
   }
