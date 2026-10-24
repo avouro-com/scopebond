@@ -235,7 +235,7 @@ const waitFor = async (check, ms) => {
   return true;
 };
 
-test("the package installs for every user and starts the agent, and its uninstall script leaves nothing", { skip: !installs && "macOS CI only (SCOPEBOND_PKG=1 SCOPEBOND_PKG_INSTALL=1): it installs on this computer", timeout: 10 * 60_000 }, async () => {
+test("the package installs for every user and starts the agent, upgrades over itself, and its uninstall script leaves nothing", { skip: !installs && "macOS CI only (SCOPEBOND_PKG=1 SCOPEBOND_PKG_INSTALL=1): it installs on this computer", timeout: 10 * 60_000 }, async () => {
   assert.equal(sudo(["true"]).status, 0, "needs sudo without a password (a CI runner)");
   const pkg = buildPkg(join(here, "..", "build", "scopebond-agent"), { identity: null, trayApp });
   // The agent the package starts would sign this never-connected computer in to Scopebond Cloud on its first start and
@@ -293,6 +293,23 @@ test("the package installs for every user and starts the agent, and its uninstal
       assert.ok(await waitFor(() => /state = running/.test(loaded(uid).stdout), 30_000), "autostart on starts it again");
       assert.ok(!existsSync(own), "no LaunchAgent of the person's own");
     } else console.log(`no graphical session for uid ${uid}: the LaunchAgent starts at the next sign-in, not checked here`);
+    // An upgrade: a newer package over this one. What runs stops before its files are replaced and runs again after; the
+    // updater stays loaded and its folders keep their modes; the receipt names the new version.
+    const [major, minor, patch] = installerVersion().split(".").map(Number);
+    const next = `${major}.${minor}.${patch + 1}`;
+    const newer = buildPkg(join(here, "..", "build", "scopebond-agent"), { identity: null, trayApp, version: next });
+    const upgrade = sudo(["installer", "-pkg", newer, "-target", "/"]);
+    assert.equal(upgrade.status, 0, upgrade.stdout + upgrade.stderr);
+    assert.match(spawnSync("pkgutil", ["--pkg-info", PACKAGE_ID], { encoding: "utf8" }).stdout, new RegExp(`^version: ${literal(next)}$`, "m"));
+    assert.equal(sudo(["launchctl", "print", `system/${MAC_UPDATER_LABEL}`]).status, 0, "the updater is still loaded after the upgrade");
+    assert.equal(statSync(MAC_UPDATER_PATHS.requests).mode & 0o7777, 0o1733);
+    if (signedIn(uid)) {
+      assert.ok(await waitFor(() => /state = running/.test(loaded(uid).stdout), 30_000), "the agent runs again after the upgrade");
+      if (trayApp) {
+        const tray = () => spawnSync("launchctl", ["print", `gui/${uid}/com.scopebond.tray`], { encoding: "utf8" });
+        assert.ok(await waitFor(() => /state = running/.test(tray().stdout), 30_000), "the menu-bar app runs again after the upgrade");
+      }
+    }
   } catch (error) { removed(); throw error; }
 
   const uninstall = removed();
