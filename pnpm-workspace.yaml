@@ -18,3 +18,7 @@ blockExoticSubdeps: true
 # checks and links its platform binary, as it did under pnpm 9.
 onlyBuiltDependencies:
   - esbuild
+# Security fixes for transitive dependencies, until their parents take them:
+# - launch-editor >= 2.14.2 (GHSA-587h-7wmj-h5pm, GHSA-698v-4r3x-3vcv, GHSA-r825-w8mm-5pxw), via @changesets/cli.
+overrides:
+  launch-editor: ^2.14.2

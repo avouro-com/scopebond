@@ -14,7 +14,7 @@ import { posix } from "node:path";
 import { digest, keyedDigest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
 import { isCredentialName, maskWords, pipedSecrets, type PipedSecret } from "@scopebond/gateway";
 import { INTERPRETERS, assignmentsOf, canonProgram, decomposeShell, gitArgs, gitEnvConfigs, parseGitPush, type SimpleCommand } from "./shell.js";
-import { textOf, trimChars } from "./text.js";
+import { textOf, trimChars, trimEndChars } from "./text.js";
 import { derivePackMcp, derivePackTargets, type PackAction, type PackProbe } from "./packs.js";
 import { systemFiles } from "./infra-probe.js";
 // typed-ops.ts imports this module too; each side reads the other only inside functions, never while loading.
@@ -310,7 +310,7 @@ const asShellVariables = (word: string): string =>
  *  at run time, so it is matched against the protected places as a pattern). */
 function fileIntent(action: "file.read" | "file.write", word: string, dir: string, cwd?: string): Mapped[] {
   let w = expandHome(word);
-  if (dir && !STARTS_ELSEWHERE.test(w) && !HOLDS_VARIABLE.test(w)) w = dir.replace(/\/+$/, "") + "/" + w;
+  if (dir && !STARTS_ELSEWHERE.test(w) && !HOLDS_VARIABLE.test(w)) w = trimEndChars(dir, "/") + "/" + w;
   const path = rel(scrubPath(w), cwd);
   const pattern = asShellVariables(w);
   if (UNRESOLVED.test(pattern)) {
