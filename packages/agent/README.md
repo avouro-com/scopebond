@@ -105,6 +105,11 @@ too.
 
   As on Windows, only an https address is used; a value that is not one stops the sign-in. Without a workspace, the
   agent signs in to Scopebond Cloud.
+- **From an npm install.** When the package's agent starts (or `setup` runs) and finds the agent installed with npm, it
+  takes over first: the npm agent is asked to stop, its LaunchAgent in `~/Library/LaunchAgents` and its launcher go
+  (autostart becomes the package's LaunchAgent), and every Scopebond hook entry runs `/usr/local/bin/scopebond-agent`.
+  The npm package stays where npm put it; the agent says once, and `status` keeps saying while it is there, that
+  `npm uninstall -g @scopebond/agent` removes it.
 - **Autostart.** It is the package's LaunchAgent. `autostart off` disables it for this person in launchd, and `autostart
   on` enables it again; neither writes a LaunchAgent of the person's own (one written before the package is removed).
   `status` reads launchd's disabled list.

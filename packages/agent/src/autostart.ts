@@ -293,6 +293,10 @@ export function enableAutostart(scopebondHome: string, cli: string, node = proce
     // package's (enabled for this person again, and started now unless it already runs).
     rmSync(autostartPaths().macPlist, { force: true });
     rmSync(launcherPath(scopebondHome, platform), { force: true });
+    // The label loaded from another LaunchAgent (the person's own, an npm install's) gives way to the package's.
+    const loaded = mac.launchctl(["print", `gui/${mac.uid}/${LABEL}`]);
+    const from = /^\s*path = (.+)$/m.exec(loaded.out)?.[1]?.trim();
+    if (loaded.ok && from && from !== mac.plist) mac.launchctl(["bootout", `gui/${mac.uid}/${LABEL}`]);
     mac.launchctl(["enable", `gui/${mac.uid}/${LABEL}`]);
     mac.launchctl(["bootstrap", `gui/${mac.uid}`, mac.plist]);
     return `the Scopebond package's LaunchAgent (${mac.plist}) starts the agent with your sign-in`;

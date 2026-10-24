@@ -126,7 +126,7 @@ export async function runSetup(o: SetupOptions): Promise<number> {
   const single = isSingleExecutable();
   // The signed install takes over from an npm install of the agent first (its agent stopped, its sign-in entry, Apps entry
   // and hook entries moved to this executable), as it does when it starts.
-  if (single && process.platform === "win32") {
+  if (single && (process.platform === "win32" || process.platform === "darwin")) {
     for (const step of await migrateFromNpm(o.dir, installKind(), nativeTrayPath(), () => { /* said below */ })) say(`✓ Moved from the npm install: ${step}`);
   }
   const global = agentOnThisComputer(single, o.version);

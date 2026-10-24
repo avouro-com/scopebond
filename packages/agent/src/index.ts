@@ -51,7 +51,7 @@ export { runUpdateHelper, helperInput, UPDATE_START_DEADLINE_MS } from "./update
 export type { HelperInput, HelperDeps } from "./update-helper.js";
 export { installedWorkspace, installedKey, connectWithInstallKey, httpsOrigin, startFirstSignIn, readInstallerSetting, DEFAULT_WORKSPACE, SETTINGS_KEYS, MAC_SETTINGS_DOMAINS, INSTALLER_SETTINGS, FIRST_SIGNIN_FILE, INSTALL_KEY_VALUE } from "./signin.js";
 export type { RegistryReader, FirstSignIn, FirstSignInOptions } from "./signin.js";
-export { findNpmInstall, hasNpmInstall, migrateFromNpm, isNpmLauncher, readMigration, MIGRATED_FILE } from "./migrate.js";
+export { findNpmInstall, hasNpmInstall, migrateFromNpm, isNpmLauncher, launcherPackageDir, npmRemovalCommand, readMigration, MIGRATED_FILE } from "./migrate.js";
 export type { NpmInstall, MigrateDeps, Migration } from "./migrate.js";
 export { useNativeHookEntries, hasForeignHookEntries, missingPrograms } from "./hook-entries.js";
 export { agentCli, hookCli, setupCli, folderSentence, MAC_PACKAGE_UNINSTALL } from "./commands.js";

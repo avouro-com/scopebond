@@ -25,7 +25,7 @@ import { agentVersion } from "./update.js";
 import { writeOutputTo } from "./log-file.js";
 import { refreshAppsEntry, writeAppsEntry } from "./apps-entry.js";
 import { runUninstall } from "./uninstall.js";
-import { installKind, UPDATE_HELPER_COMMAND } from "./native-update.js";
+import { installKind, MAC_PACKAGE_EXE, UPDATE_HELPER_COMMAND } from "./native-update.js";
 import { upkeepCommand } from "./upkeep.js";
 import { AGENT_VERSION, startService, takeOver } from "./service.js";
 import { agentProgram, npmProgram, setupCli } from "./commands.js";
@@ -243,7 +243,7 @@ async function stopRunning(): Promise<boolean> {
 function installNotes(): string[] {
   const notes: string[] = [];
   const kind = installKind();
-  if (process.platform === "win32") {
+  if (process.platform === "win32" || process.platform === "darwin") {
     try {
       if (kind !== "npm") {
         const found = findNpmInstall(dir);
@@ -251,7 +251,10 @@ function installNotes(): string[] {
           notes.push(`the Scopebond Agent is also installed with npm${found.packageDir ? ` (${found.packageDir})` : ""}; this signed install is the one in use${found.hookEntries.length ? `, and it moves the hook entries of ${found.hookEntries.join(", ")} to itself when it starts` : ""}. Remove the npm copy: ${npmRemovalCommand()}`);
         }
       } else {
-        const signed = SETTINGS_KEYS.map((key) => readRegistryValue(key, "InstallPath")).find((path) => path && existsSync(win32.join(path, "scopebond-agent.exe")));
+        // The macOS package's executable, or the Windows installer's recorded folder.
+        const signed = process.platform === "darwin"
+          ? (existsSync(MAC_PACKAGE_EXE) ? MAC_PACKAGE_EXE : undefined)
+          : SETTINGS_KEYS.map((key) => readRegistryValue(key, "InstallPath")).find((path) => path && existsSync(win32.join(path, "scopebond-agent.exe")));
         if (signed) notes.push(`the signed Scopebond installer is also installed (${signed}); it takes over from this npm copy when it starts. Then remove this one: ${npmRemovalCommand()}`);
       }
     } catch { /* the registry or the settings could not be read: nothing to add */ }
