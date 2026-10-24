@@ -8,7 +8,8 @@ name: Native release (signed)
 #   installer  the installer built around the signed programs (WiX), with no secrets and no OIDC token
 #   sign-installer  the installer signed (the `signing` environment again), then every file verified, summed, the
 #              release manifest signed (required) and everything attested
-#   sign-macos the Apple build (Developer ID + notarization), designed in and off until its secrets exist
+#   sign-macos the Apple build (Developer ID + notarization): the executable, and the installer package signed with the
+#              Developer ID Installer identity, notarized and stapled; designed in and off until its secrets exist
 #   defender-scan  the signed files scanned by Microsoft Defender on current definitions; a detection stops the release
 #   release    a draft GitHub release with the signed files, for a person to check and publish
 #
@@ -386,8 +387,10 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # The Apple build: a Developer ID signed, hardened-runtime and notarized executable, separate from Artifact Signing.
-  # Off until the owner adds the Apple secrets to the `signing-apple` environment and sets APPLE_SIGNING_ENABLED.
+  # The Apple build: a Developer ID signed, hardened-runtime and notarized executable, and the installer package around it
+  # (packages/native/build-pkg.mjs) signed with the Developer ID Installer identity, notarized and stapled; separate from
+  # Artifact Signing. Off until the owner adds the Apple secrets to the `signing-apple` environment and sets
+  # APPLE_SIGNING_ENABLED. Without them the package is built unsigned by ci.yml's test-macos job, as a fork's would be.
   sign-macos:
     name: sign (macos)
     if: github.repository == 'avouro-com/scopebond' && github.ref == 'refs/heads/main' && vars.APPLE_SIGNING_ENABLED == 'true'
@@ -441,13 +444,41 @@ jobs:
           ditto -c -k --keepParent "$exe" scopebond-agent-macos.zip
           echo "$APPLE_NOTARY_KEY" > "$RUNNER_TEMP/notary.p8"
           xcrun notarytool submit scopebond-agent-macos.zip --key "$RUNNER_TEMP/notary.p8" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER" --wait
+      # The installer package around the signed executable: signed by the Developer ID Installer identity (a certificate
+      # of its own, in the same keychain), notarized, and the ticket stapled so Gatekeeper accepts it offline.
+      - name: Build, sign, notarize and staple the installer package
+        env:
+          APPLE_INSTALLER_CERTIFICATE_P12: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_P12 }}
+          APPLE_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_PASSWORD }}
+          APPLE_INSTALLER_IDENTITY: ${{ vars.APPLE_INSTALLER_IDENTITY }}
+          APPLE_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER: ${{ vars.APPLE_NOTARY_ISSUER }}
+        run: |
+          set -euo pipefail
+          test -n "$APPLE_INSTALLER_IDENTITY" || { echo "APPLE_INSTALLER_IDENTITY is not set: the package would be unsigned" >&2; exit 1; }
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          echo "$APPLE_INSTALLER_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/installer.p12"
+          security import "$RUNNER_TEMP/installer.p12" -k "$keychain" -P "$APPLE_INSTALLER_CERTIFICATE_PASSWORD" -T /usr/bin/productbuild -T /usr/bin/productsign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" "$keychain"
+          node packages/native/build-pkg.mjs packages/native/build/scopebond-agent
+          pkg="$(ls packages/native/build/scopebond-agent-*.pkg)"
+          pkgutil --check-signature "$pkg"
+          xcrun notarytool submit "$pkg" --key "$RUNNER_TEMP/notary.p8" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER" --wait
+          xcrun stapler staple "$pkg"
+          xcrun stapler validate "$pkg"
+          spctl --assess --type install --verbose=2 "$pkg"
+          cp "$pkg" .
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: scopebond-agent-macos.zip
+          subject-path: |
+            scopebond-agent-macos.zip
+            scopebond-agent-*.pkg
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: signed-macos
-          path: scopebond-agent-macos.zip
+          path: |
+            scopebond-agent-macos.zip
+            scopebond-agent-*.pkg
           if-no-files-found: error
           retention-days: 30
 

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The Scopebond Agent for each person who signs in to this Mac, as that person (the macOS installer package puts it in
+     /Library/LaunchAgents). The label is the agent's own autostart label, so launchd never runs a second agent from a
+     person's `scopebond-agent autostart on`. The agent writes its own log in the person's Scopebond folder, as it does
+     under the per-user autostart; a crash restarts it after 30 seconds, a clean exit (`scopebond-agent stop`) does not. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.scopebond.agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>SCOPEBOND_AGENT_LOG="${SCOPEBOND_HOME:-$HOME/.scopebond}/agent.log" exec /usr/local/bin/scopebond-agent run</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>ProcessType</key><string>Background</string>
+</dict>
+</plist>

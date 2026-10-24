@@ -86,11 +86,16 @@ test("the signed installer: the same notice, and the last sentence names the ins
   try {
     for (const kind of ["per-user", "per-machine"]) {
       const c = await computer(cloud);
-      const r = await uninstall(c, { kind });
+      const r = await uninstall(c, { kind, platform: "win32" });
       assert.equal(r.code, 0, r.out);
       assert.equal(r.last, `Your Scopebond folder ${c.dir} stays (keys and records not yet sent). Delete it, or run \`msiexec /x … PURGE=1\`, to remove everything.`);
     }
-    assert.deepEqual(cloud.state().uninstalls.map((u) => u.purge), [false, false]);
+    // The macOS package: its removal script's purge option.
+    const c = await computer(cloud);
+    const r = await uninstall(c, { kind: "per-machine", platform: "darwin" });
+    assert.equal(r.code, 0, r.out);
+    assert.equal(r.last, `Your Scopebond folder ${c.dir} stays (keys and records not yet sent). Delete it, or run \`sudo "/Library/Application Support/Scopebond/uninstall.sh" --purge\`, to remove everything.`);
+    assert.deepEqual(cloud.state().uninstalls.map((u) => u.purge), [false, false, false]);
   } finally { await cloud.close(); }
 });
 
@@ -179,8 +184,13 @@ test("spawnHook gives up on a hook past its time limit", async () => {
 test("folderSentence: each case in one plain sentence", () => {
   assert.equal(folderSentence("/h/.scopebond", { exists: true, purged: false, kind: "npm", me: "scopebond-agent.cmd" }),
     "Your Scopebond folder /h/.scopebond stays (keys and records not yet sent). Delete it, or run `scopebond-agent.cmd uninstall --purge`, to remove everything.");
-  assert.equal(folderSentence("/h/.scopebond", { exists: true, purged: false, kind: "per-user", me: "scopebond-agent" }),
+  assert.equal(folderSentence("/h/.scopebond", { exists: true, purged: false, kind: "per-user", me: "scopebond-agent", platform: "win32" }),
     "Your Scopebond folder /h/.scopebond stays (keys and records not yet sent). Delete it, or run `msiexec /x … PURGE=1`, to remove everything.");
+  // On a Mac: the package's removal script, never msiexec; the executable run from anywhere else names nothing to run.
+  assert.equal(folderSentence("/h/.scopebond", { exists: true, purged: false, kind: "per-machine", me: "scopebond-agent", platform: "darwin" }),
+    "Your Scopebond folder /h/.scopebond stays (keys and records not yet sent). Delete it, or run `sudo \"/Library/Application Support/Scopebond/uninstall.sh\" --purge`, to remove everything.");
+  assert.equal(folderSentence("/h/.scopebond", { exists: true, purged: false, kind: "per-user", me: "scopebond-agent", platform: "darwin" }),
+    "Your Scopebond folder /h/.scopebond stays (keys and records not yet sent). Delete it to remove everything.");
   assert.equal(folderSentence("/h/.scopebond", { exists: true, purged: false, kind: null, me: "x" }),
     "Your Scopebond folder /h/.scopebond stays (keys and records not yet sent). Delete it to remove everything.");
   assert.equal(folderSentence("/h/.scopebond", { exists: false, purged: true, kind: "npm", me: "x" }),

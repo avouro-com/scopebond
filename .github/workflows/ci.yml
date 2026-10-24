@@ -112,6 +112,13 @@ jobs:
         run: node --test packages/native/test/sea.test.mjs
         env:
           SCOPEBOND_SEA: "1"
+      # The installer package around that executable (unsigned here): taken apart and checked, then installed for every
+      # user and removed again with its uninstall script, on this throwaway runner.
+      - name: Build, install and remove the installer package
+        run: node --test packages/native/test/pkg.test.mjs
+        env:
+          SCOPEBOND_PKG: "1"
+          SCOPEBOND_PKG_INSTALL: "1"
 
   # The clean-machine Windows journey (powershell.exe, pwsh.exe, a standard user), one job each,
   # in parallel with everything else. It packs the hook and agent itself.

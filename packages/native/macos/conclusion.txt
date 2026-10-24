@@ -1,0 +1,13 @@
+The Scopebond Agent is installed.
+
+It starts with your sign-in to this Mac and, the first time, opens your workspace's sign-in page in your browser. To connect it to a workspace yourself, run this in Terminal:
+
+    scopebond-agent setup <workspace-url>
+
+"scopebond-agent status" shows where it stands.
+
+To remove it, run this in Terminal (add --purge to delete your Scopebond folder too):
+
+    sudo "/Library/Application Support/Scopebond/uninstall.sh"
+
+Help: https://scopebond.com/documentation
