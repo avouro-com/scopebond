@@ -24,7 +24,13 @@ pub enum AgentLink {
     Missing,
 }
 
-/// Whether Scopebond starts with Windows for this person.
+/// The menu's autostart switch, in the system's own words.
+#[cfg(windows)]
+pub const AUTOSTART_LABEL: &str = "Start with Windows";
+#[cfg(not(windows))]
+pub const AUTOSTART_LABEL: &str = "Open at Login";
+
+/// Whether Scopebond starts with Windows (opens at login, on macOS) for this person.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Autostart {
     On,
@@ -178,7 +184,7 @@ pub fn menu_spec(answer: Option<&TrayAnswer>, ctx: &MenuContext) -> Vec<Entry> {
     });
     out.push(Entry::Check {
         id: "autostart".into(),
-        label: if ctx.autostart == Autostart::Managed { "Start with Windows (set for every user)".into() } else { "Start with Windows".into() },
+        label: if ctx.autostart == Autostart::Managed { format!("{AUTOSTART_LABEL} (set for every user)") } else { AUTOSTART_LABEL.into() },
         checked: ctx.autostart != Autostart::Off,
         enabled: ctx.autostart != Autostart::Managed,
     });
@@ -266,7 +272,7 @@ mod tests {
                 "-",
                 "Open Acme in Scopebond Cloud",
                 "[x] Notifications",
-                "[x] Start with Windows",
+                format!("[x] {AUTOSTART_LABEL}").as_str(),
                 "-",
                 "Get help…",
                 "Hide icon",
@@ -395,14 +401,14 @@ mod tests {
         c.notifications = Notifications::Off;
         c.autostart = Autostart::Managed;
         let l = labels(&menu_spec(Some(&a), &c));
-        assert!(l.contains(&"[x] Start with Windows (set for every user)".to_string()));
+        assert!(l.contains(&format!("[x] {AUTOSTART_LABEL} (set for every user)")));
         assert!(l.contains(&"[ ] Notifications".to_string()), "off: the switch shows unticked");
         // The agent said "problems" in this fixture, which reads as on: the switch turns it off.
         assert_eq!(command_for("notifications", Some(&a)), Some(Command::Notifications(Notifications::Off)));
         assert_eq!(command_for("notifications", None), None, "nothing to flip without the agent");
         assert_eq!(command_for("notifications:loud", Some(&a)), None);
         c.autostart = Autostart::Off;
-        assert!(labels(&menu_spec(Some(&a), &c)).contains(&"[ ] Start with Windows".to_string()));
+        assert!(labels(&menu_spec(Some(&a), &c)).contains(&format!("[ ] {AUTOSTART_LABEL}")));
         assert_eq!(Autostart::Managed.as_str(), "managed");
     }
 

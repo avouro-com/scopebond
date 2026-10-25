@@ -198,6 +198,59 @@ pub fn render(state: IconState, size: u32) -> Vec<u8> {
     c.rgba()
 }
 
+/// A PNG file of the icon at `size` (8-bit RGBA, deflate's stored blocks: no compression library), as macOS and Tauri
+/// read for an app's icon.
+pub fn png(state: IconState, size: u32) -> Vec<u8> {
+    let rgba = render(state, size);
+    // Each row starts with filter type 0 (none).
+    let mut raw = Vec::with_capacity(rgba.len() + size as usize);
+    for row in rgba.chunks(size as usize * 4) {
+        raw.push(0);
+        raw.extend_from_slice(row);
+    }
+    // zlib: header, stored blocks of at most 65535 bytes, Adler-32.
+    let mut z = vec![0x78, 0x01];
+    let blocks: Vec<&[u8]> = raw.chunks(65_535).collect();
+    for (i, block) in blocks.iter().enumerate() {
+        z.push(u8::from(i + 1 == blocks.len()));
+        let len = block.len() as u16;
+        z.extend_from_slice(&len.to_le_bytes());
+        z.extend_from_slice(&(!len).to_le_bytes());
+        z.extend_from_slice(block);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for &byte in &raw {
+        a = (a + u32::from(byte)) % 65_521;
+        b = (b + a) % 65_521;
+    }
+    z.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&size.to_be_bytes());
+    ihdr.extend_from_slice(&size.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    let mut out = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    for (kind, data) in [(b"IHDR", ihdr.as_slice()), (b"IDAT", z.as_slice()), (b"IEND", &[][..])] {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let start = out.len();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        let crc = crc32(&out[start..]);
+        out.extend_from_slice(&crc.to_be_bytes());
+    }
+    out
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for &byte in bytes {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+        }
+    }
+    !crc
+}
+
 /// An .ico file with one 32-bit image per size (uncompressed, with alpha), as Windows reads for a program's icon.
 pub fn ico(state: IconState, sizes: &[u32]) -> Vec<u8> {
     let images: Vec<Vec<u8>> = sizes.iter().map(|&s| bmp_entry(&render(state, s), s)).collect();
@@ -245,6 +298,28 @@ fn bmp_entry(rgba: &[u8], size: u32) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_png_is_a_valid_rgba_image_of_its_size() {
+        let png = super::png(super::IconState::Protected, 64);
+        assert_eq!(&png[..8], &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
+        assert_eq!(&png[12..16], b"IHDR");
+        assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 64);
+        assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 64);
+        assert_eq!(&png[24..29], &[8, 6, 0, 0, 0], "8-bit RGBA");
+        // Every chunk's CRC covers its type and data.
+        let mut at = 8;
+        let mut kinds = Vec::new();
+        while at < png.len() {
+            let len = u32::from_be_bytes(png[at..at + 4].try_into().unwrap()) as usize;
+            let crc = u32::from_be_bytes(png[at + 8 + len..at + 12 + len].try_into().unwrap());
+            assert_eq!(crc, super::crc32(&png[at + 4..at + 8 + len]));
+            kinds.push(String::from_utf8_lossy(&png[at + 4..at + 8]).into_owned());
+            at += 12 + len;
+        }
+        assert_eq!(kinds, ["IHDR", "IDAT", "IEND"]);
+        assert_eq!(super::crc32(b"123456789"), 0xcbf4_3926, "the standard CRC-32 check value");
+    }
+
     use super::*;
 
     fn pixel(rgba: &[u8], size: u32, x: u32, y: u32) -> [u8; 4] {

@@ -5,6 +5,7 @@
 # window) starts it at the next sign-in. Nothing here ever fails the install.
 LABEL=com.scopebond.agent
 PLIST="/Library/LaunchAgents/$LABEL.plist"
+TRAY_PLIST=/Library/LaunchAgents/com.scopebond.tray.plist
 UPDATER=com.scopebond.updater
 SUPPORT="/Library/Application Support/Scopebond"
 
@@ -18,5 +19,7 @@ SUPPORT="/Library/Application Support/Scopebond"
 
 for uid in $(/bin/ps -axo uid=,comm= | /usr/bin/awk '$1 != 0 && $2 ~ /\/loginwindow$/ { print $1 }' | /usr/bin/sort -u); do
   /bin/launchctl bootstrap "gui/$uid" "$PLIST" 2>/dev/null || true
+  # The menu-bar app, when the package carries it.
+  [ ! -f "$TRAY_PLIST" ] || /bin/launchctl bootstrap "gui/$uid" "$TRAY_PLIST" 2>/dev/null || true
 done
 exit 0

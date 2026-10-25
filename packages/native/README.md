@@ -129,6 +129,10 @@ macOS 11 or later. The package:
 
 - installs for every user of the Mac (an administrator's password): `/usr/local/bin/scopebond-agent`, on PATH in every
   new terminal; the folders on the way keep the owner and mode they already have;
+- with the menu-bar app (`SCOPEBOND_TRAY_APP`; the release always carries it), installs `/Applications/Scopebond.app`
+  (`node build-pkg.mjs app <scopebond-tray>` builds it around the tray program: an app with no Dock icon, the release's
+  version, the icon `icon.mjs` draws, signed ad hoc; the release signs it with the Developer ID) and its LaunchAgent
+  `/Library/LaunchAgents/com.scopebond.tray.plist`, which opens it at each sign-in;
 - adds the updater, the LaunchDaemon `/Library/LaunchDaemons/com.scopebond.updater.plist` (root): launchd starts
   `scopebond-agent update-daemon` when a person's agent leaves a request in `/Library/Application Support/Scopebond/update-requests`
   (writable by everyone, readable by root alone). It installs the newest signed, notarized release asked for, as the

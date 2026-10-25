@@ -1,9 +1,20 @@
-# scopebond-tray (Windows, not published)
+# scopebond-tray (Windows and macOS, not published)
 
 The Scopebond tray for Windows: the icon in the taskbar's notification area, its right-click menu and a small status
 panel, for the Scopebond service (`@scopebond/agent`) installed by the signed Windows installer. It is a [Tauri 2](https://v2.tauri.app) program
 (Rust, and the WebView2 that Windows already has). It is not an npm package; npm installs keep the agent's own
 PowerShell tray.
+
+On macOS the same program is the Scopebond menu-bar app, `/Applications/Scopebond.app`, installed by the macOS
+installer package (`packages/native/build-pkg.mjs`). There it:
+
+- is an app with no Dock icon or app menu (`LSUIElement`), opened at each sign-in by its own LaunchAgent
+  (`com.scopebond.tray`); *Open at Login* in its menu turns that off or on for the person in launchd;
+- leaves starting the agent to the agent's own LaunchAgent (`com.scopebond.agent`): it supervises as on Windows, and
+  ends a hung agent, but starts it through launchd (`launchctl kickstart`), never as a second process;
+- shows notifications in Notification Center (`osascript`): no buttons there, so the menu-bar icon opens the panel with
+  the block's *Unblock…* form or *Restart it*;
+- copies the support report with `pbcopy` and shows About in a dialog.
 
 ## What a person sees
 
@@ -153,7 +164,7 @@ stop on purpose, another agent starting, no agent program, failed restarts withi
 
 ## Build and test
 
-Windows only (the tray is built and tested in CI on `windows-latest`; nothing here needs a local Rust toolchain).
+Built and tested in CI on `windows-latest` and `macos-latest`.
 
 ```sh
 cd packages/tray
@@ -165,7 +176,10 @@ The toolchain is pinned in `rust-toolchain.toml` and the dependencies in `Cargo.
 icon and assembles the panel's page from `ui/` into `dist/` before Tauri's own build step. The `tray (windows)` job in
 `.github/workflows/tray.yml` runs the tests, builds the release program, checks that it is a Windows (not console)
 program and that it stays under 25 MB of memory at idle; it runs when `packages/tray`, `packages/native` or a workflow
-changes.
+changes. The `tray (macos)` job runs the tests, builds `Scopebond.app` (`node packages/native/build-pkg.mjs app
+target/release/scopebond-tray`), and checks it beside a stand-in agent on a Unix socket: it starts, the agent answers,
+and its idle physical footprint stays under the same 25 MB. On macOS `build.rs` also writes `icons/icon.png`, which
+Tauri needs there.
 
 ## Status
 

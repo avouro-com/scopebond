@@ -13,12 +13,17 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FIRST_SIGNIN_FILE, LABEL, MAC_PACKAGE_EXE, MAC_PACKAGE_UNINSTALL, MAC_UPDATER_COMMAND, MAC_UPDATER_LABEL, MAC_UPDATER_PATHS, MAC_UPDATER_PLIST } from "@scopebond/agent";
 import { buildSea } from "../build-sea.mjs";
-import { buildPkg, distributionXml, MIN_MACOS, PACKAGE_ID, PAYLOAD } from "../build-pkg.mjs";
+import { buildPkg, distributionXml, MIN_MACOS, PACKAGE_ID, PAYLOAD, TRAY_BUNDLE_ID, trayInfoPlist } from "../build-pkg.mjs";
 import { installerVersion } from "../version.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const macos = join(here, "..", "macos");
 const enabled = process.platform === "darwin" && process.env.SCOPEBOND_PKG === "1";
+// The menu-bar app, when the job built one (native-release.yml's build-macos: build-pkg.mjs app); without it the package
+// is the agent alone, as ci.yml's test-macos builds it.
+const trayApp = process.env.SCOPEBOND_TRAY_APP || null;
+const TRAY_PLIST_PATH = "/Library/LaunchAgents/com.scopebond.tray.plist";
+const APP = "/Applications/Scopebond.app";
 const read = (...p) => readFileSync(join(macos, ...p), "utf8");
 /** `s` as a regular expression that matches it literally. */
 const literal = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -50,6 +55,16 @@ test("the package's files agree with the agent: its path, its autostart label an
   const uninstall = read("uninstall.sh");
   assert.ok(uninstall.includes(`EXE=${MAC_PACKAGE_EXE}\n`) && uninstall.includes(`PACKAGE_ID=${PACKAGE_ID}\n`));
   assert.ok(uninstall.includes("SCOPEBOND_UNINSTALL_CALLER=macos-package"), "the script says the folder sentence itself");
+});
+
+test("the menu-bar app's Info.plist: its identifier, the release's version, no Dock icon", () => {
+  const plist = trayInfoPlist("1.2.3");
+  assert.match(plist, /<key>CFBundleIdentifier<\/key><string>com\.scopebond\.tray<\/string>/);
+  assert.match(plist, /<key>CFBundleShortVersionString<\/key><string>1\.2\.3<\/string>/);
+  assert.match(plist, /<key>CFBundleExecutable<\/key><string>scopebond-tray<\/string>/);
+  assert.match(plist, /<key>LSUIElement<\/key><true\/>/);
+  assert.match(read("com.scopebond.tray.plist"), /<string>\/Applications\/Scopebond\.app\/Contents\/MacOS\/scopebond-tray<\/string>/);
+  for (const script of [read("scripts", "preinstall"), read("uninstall.sh")]) assert.ok(script.includes("TRAY=com.scopebond.tray"), "the scripts stop the app too");
 });
 
 test("the Distribution: one package at the agent's version, for this architecture and macOS 11 or later", () => {
@@ -87,7 +102,7 @@ test("the package installs the executable, the LaunchAgent and the uninstall scr
   const built = join(here, "..", "build", "scopebond-agent");
   const exe = existsSync(built) ? built : await buildSea();
   const v = installerVersion();
-  const pkg = buildPkg(exe, { identity: null });
+  const pkg = buildPkg(exe, { identity: null, trayApp });
   assert.equal(pkg, join(here, "..", "build", `scopebond-agent-${v}-${process.arch === "arm64" ? "arm64" : "x86_64"}.pkg`));
   // Unsigned without an identity, as the Windows build job's files are (the release workflow signs it).
   const signature = spawnSync("pkgutil", ["--check-signature", pkg], { encoding: "utf8" });
@@ -128,7 +143,14 @@ test("the package installs the executable, the LaunchAgent and the uninstall scr
     ["./Library/LaunchAgents/com.scopebond.agent.plist", "-rw-r--r--", "root", "wheel"],
     ["./Library/LaunchDaemons/com.scopebond.updater.plist", "-rw-r--r--", "root", "wheel"],
     ["./usr/local/bin/scopebond-agent", "-rwxr-xr-x", "root", "wheel"],
-  ]);
+    ...(trayApp ? [
+      ["./Applications/Scopebond.app/Contents/Info.plist", "-rw-r--r--", "root", "wheel"],
+      ["./Applications/Scopebond.app/Contents/MacOS/scopebond-tray", "-rwxr-xr-x", "root", "wheel"],
+      ["./Applications/Scopebond.app/Contents/Resources/scopebond.icns", "-rw-r--r--", "root", "wheel"],
+      ["./Applications/Scopebond.app/Contents/_CodeSignature/CodeResources", "-rw-r--r--", "root", "wheel"],
+      ["./Library/LaunchAgents/com.scopebond.tray.plist", "-rw-r--r--", "root", "wheel"],
+    ] : []),
+  ].sort());
 
   // The payload's executable is the one given, still signed, and it runs.
   const payload = join(component, "Payload");
@@ -167,6 +189,20 @@ test("the package installs the executable, the LaunchAgent and the uninstall scr
     StandardErrorPath: "/Library/Logs/Scopebond-updater.log",
   });
 
+  if (trayApp) {
+    // The menu-bar app as it was signed, with no Dock icon, and its LaunchAgent.
+    const app = join(payload, "Applications", "Scopebond.app");
+    const verify = spawnSync("codesign", ["--verify", "--strict", app], { encoding: "utf8" });
+    assert.equal(verify.status, 0, verify.stderr);
+    const info = JSON.parse(spawnSync("plutil", ["-convert", "json", "-o", "-", join(app, "Contents", "Info.plist")], { encoding: "utf8" }).stdout);
+    assert.equal(info.CFBundleIdentifier, TRAY_BUNDLE_ID);
+    assert.equal(info.LSUIElement, true);
+    assert.equal(info.CFBundleShortVersionString, v);
+    const launch = JSON.parse(spawnSync("plutil", ["-convert", "json", "-o", "-", join(payload, "Library", "LaunchAgents", "com.scopebond.tray.plist")], { encoding: "utf8" }).stdout);
+    assert.deepEqual(launch.ProgramArguments, [`${APP}/Contents/MacOS/scopebond-tray`]);
+    assert.equal(launch.Label, "com.scopebond.tray");
+  }
+
   // The scripts Installer runs, as they are in the repository and executable.
   const scripts = join(component, "Scripts");
   assert.deepEqual(readdirSync(scripts).sort(), ["postinstall", "preinstall"]);
@@ -199,9 +235,9 @@ const waitFor = async (check, ms) => {
   return true;
 };
 
-test("the package installs for every user and starts the agent, and its uninstall script leaves nothing", { skip: !installs && "macOS CI only (SCOPEBOND_PKG=1 SCOPEBOND_PKG_INSTALL=1): it installs on this computer", timeout: 10 * 60_000 }, async () => {
+test("the package installs for every user and starts the agent, upgrades over itself, and its uninstall script leaves nothing", { skip: !installs && "macOS CI only (SCOPEBOND_PKG=1 SCOPEBOND_PKG_INSTALL=1): it installs on this computer", timeout: 10 * 60_000 }, async () => {
   assert.equal(sudo(["true"]).status, 0, "needs sudo without a password (a CI runner)");
-  const pkg = buildPkg(join(here, "..", "build", "scopebond-agent"), { identity: null });
+  const pkg = buildPkg(join(here, "..", "build", "scopebond-agent"), { identity: null, trayApp });
   // The agent the package starts would sign this never-connected computer in to Scopebond Cloud on its first start and
   // open the browser: marked as done already, so the runner never sends a real sign-in request.
   const home = process.env.SCOPEBOND_HOME ?? join(homedir(), ".scopebond");
@@ -232,7 +268,15 @@ test("the package installs for every user and starts the agent, and its uninstal
     assert.ok(await waitFor(() => result()?.version === "99.0.0", 90_000), `the updater ran: ${readFileSync("/Library/Logs/Scopebond-updater.log", "utf8").slice(-2000)}`);
     assert.equal(result().installed, false);
     assert.match(result().reason, /no signed manifest/, "a release that does not exist installs nothing");
+    if (trayApp) {
+      const where = () => `${spawnSync("pkgutil", ["--files", PACKAGE_ID], { encoding: "utf8" }).stdout.split("\n").filter((l) => l.includes("Scopebond.app/Contents/MacOS")).join(", ")}; install.log: ${spawnSync("/usr/bin/tail", ["-n", "40", "/var/log/install.log"], { encoding: "utf8" }).stdout}`;
+      assert.ok(existsSync(join(APP, "Contents", "MacOS", "scopebond-tray")), `the menu-bar app in /Applications: ${where()}`);
+    }
     if (signedIn(uid)) {
+      if (trayApp) {
+        const tray = () => spawnSync("launchctl", ["print", `gui/${uid}/com.scopebond.tray`], { encoding: "utf8" });
+        assert.ok(await waitFor(() => /state = running/.test(tray().stdout), 30_000), `the menu-bar app runs: ${tray().stdout}`);
+      }
       // postinstall started it for the person signed in; launchd runs it as that person.
       assert.ok(await waitFor(() => /state = running/.test(loaded(uid).stdout), 30_000), loaded(uid).stdout + loaded(uid).stderr);
       const status = spawnSync(MAC_PACKAGE_EXE, ["status", "--json"], { encoding: "utf8" });
@@ -252,13 +296,30 @@ test("the package installs for every user and starts the agent, and its uninstal
       assert.ok(await waitFor(() => /state = running/.test(loaded(uid).stdout), 30_000), "autostart on starts it again");
       assert.ok(!existsSync(own), "no LaunchAgent of the person's own");
     } else console.log(`no graphical session for uid ${uid}: the LaunchAgent starts at the next sign-in, not checked here`);
+    // An upgrade: a newer package over this one. What runs stops before its files are replaced and runs again after; the
+    // updater stays loaded and its folders keep their modes; the receipt names the new version.
+    const [major, minor, patch] = installerVersion().split(".").map(Number);
+    const next = `${major}.${minor}.${patch + 1}`;
+    const newer = buildPkg(join(here, "..", "build", "scopebond-agent"), { identity: null, trayApp, version: next });
+    const upgrade = sudo(["installer", "-pkg", newer, "-target", "/"]);
+    assert.equal(upgrade.status, 0, upgrade.stdout + upgrade.stderr);
+    assert.match(spawnSync("pkgutil", ["--pkg-info", PACKAGE_ID], { encoding: "utf8" }).stdout, new RegExp(`^version: ${literal(next)}$`, "m"));
+    assert.equal(sudo(["launchctl", "print", `system/${MAC_UPDATER_LABEL}`]).status, 0, "the updater is still loaded after the upgrade");
+    assert.equal(statSync(MAC_UPDATER_PATHS.requests).mode & 0o7777, 0o1733);
+    if (signedIn(uid)) {
+      assert.ok(await waitFor(() => /state = running/.test(loaded(uid).stdout), 30_000), "the agent runs again after the upgrade");
+      if (trayApp) {
+        const tray = () => spawnSync("launchctl", ["print", `gui/${uid}/com.scopebond.tray`], { encoding: "utf8" });
+        assert.ok(await waitFor(() => /state = running/.test(tray().stdout), 30_000), "the menu-bar app runs again after the upgrade");
+      }
+    }
   } catch (error) { removed(); throw error; }
 
   const uninstall = removed();
   assert.ok(uninstall.status === 0 || uninstall.status === 75, `exit ${uninstall.status}: ${uninstall.stdout}${uninstall.stderr}`);
   assert.match(uninstall.stdout, /Removed the Scopebond Agent/);
   assert.match(uninstall.stdout, /Your Scopebond folder .* stays|No Scopebond folder is left/, "the last sentence names the folder");
-  for (const file of [MAC_PACKAGE_EXE, PLIST_PATH, MAC_UPDATER_PLIST, dirname(UNINSTALL_PATH)]) assert.ok(!existsSync(file), `removed: ${file}`);
+  for (const file of [MAC_PACKAGE_EXE, PLIST_PATH, MAC_UPDATER_PLIST, dirname(UNINSTALL_PATH), APP, TRAY_PLIST_PATH]) assert.ok(!existsSync(file), `removed: ${file}`);
   assert.notEqual(sudo(["launchctl", "print", `system/${MAC_UPDATER_LABEL}`]).status, 0, "the updater is no longer loaded");
   assert.notEqual(spawnSync("pkgutil", ["--pkg-info", PACKAGE_ID], { encoding: "utf8" }).status, 0, "the receipt is forgotten");
   assert.notEqual(loaded(uid).status, 0, "launchd no longer has the agent");

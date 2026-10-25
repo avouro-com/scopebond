@@ -450,16 +450,36 @@ jobs:
           test "$(lipo -archs "$exe")" = "$ARCH"
           codesign --verify --strict "$exe"
           "$exe" --version
-      - name: Build, install and remove the installer package
+      # The menu-bar app (packages/tray), from its committed Cargo.lock, with no cache: a release build starts from the
+      # lockfile alone. Built after the executable (build-sea.mjs empties packages/native/build).
+      - name: Rust toolchain (packages/tray/rust-toolchain.toml)
+        working-directory: packages/tray
+        run: |
+          rustup toolchain install || rustup show
+          rustc --version
+      - name: Build the menu-bar app
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          (cd packages/tray && cargo build --release --locked)
+          test "$(lipo -archs packages/tray/target/release/scopebond-tray)" = "$ARCH"
+          node packages/native/build-pkg.mjs app packages/tray/target/release/scopebond-tray
+          codesign --verify --strict packages/native/build/Scopebond.app
+      - name: Build, install and remove the installer package (with the menu-bar app)
         run: node --test packages/native/test/pkg.test.mjs
         env:
           SCOPEBOND_PKG: "1"
           SCOPEBOND_PKG_INSTALL: "1"
+          SCOPEBOND_TRAY_APP: ${{ github.workspace }}/packages/native/build/Scopebond.app
+      # An artifact keeps no file modes or links: the app travels as a zip that ditto made.
+      - run: ditto -c -k --keepParent packages/native/build/Scopebond.app packages/native/build/Scopebond.app.zip
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unsigned-macos-${{ matrix.arch }}
           path: |
             packages/native/build/scopebond-agent
+            packages/native/build/Scopebond.app.zip
             packages/native/build/scopebond-agent-*.pkg
           if-no-files-found: error
           retention-days: 7
@@ -494,6 +514,7 @@ jobs:
             packages/agent/package.json
             packages/native/build-pkg.mjs
             packages/native/version.mjs
+            packages/native/icon.mjs
             packages/native/macos
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -538,6 +559,11 @@ jobs:
           codesign --force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp --entitlements "$RUNNER_TEMP/entitlements.plist" "$exe"
           codesign --verify --strict --verbose=2 "$exe"
           "$exe" --version
+          # The menu-bar app: Developer ID, hardened runtime (its web view runs in the system's own processes, so it
+          # needs no JIT entitlement).
+          ditto -x -k packages/native/build/Scopebond.app.zip packages/native/build
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp packages/native/build/Scopebond.app
+          codesign --verify --strict --verbose=2 packages/native/build/Scopebond.app
           ditto -c -k --keepParent "$exe" "scopebond-agent-macos-$ARCH.zip"
           echo "$APPLE_NOTARY_KEY" > "$RUNNER_TEMP/notary.p8"
           xcrun notarytool submit "scopebond-agent-macos-$ARCH.zip" --key "$RUNNER_TEMP/notary.p8" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER" --wait
@@ -557,7 +583,7 @@ jobs:
           echo "$APPLE_INSTALLER_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/installer.p12"
           security import "$RUNNER_TEMP/installer.p12" -k "$keychain" -P "$APPLE_INSTALLER_CERTIFICATE_PASSWORD" -T /usr/bin/productbuild -T /usr/bin/productsign
           security set-key-partition-list -S apple-tool:,apple: -s -k "" "$keychain"
-          node packages/native/build-pkg.mjs packages/native/build/scopebond-agent
+          SCOPEBOND_TRAY_APP="$PWD/packages/native/build/Scopebond.app" node packages/native/build-pkg.mjs packages/native/build/scopebond-agent
           pkg="$(ls packages/native/build/scopebond-agent-*.pkg)"
           pkgutil --check-signature "$pkg"
           xcrun notarytool submit "$pkg" --key "$RUNNER_TEMP/notary.p8" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER" --wait

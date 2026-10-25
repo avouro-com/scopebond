@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The Scopebond menu-bar app for each person who signs in to this Mac, as that person (the macOS installer package
+     puts it in /Library/LaunchAgents). Open at Login in its menu turns it off or on for the person in launchd. A crash
+     opens it again after 30 seconds. The agent itself has its own LaunchAgent (com.scopebond.agent). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.scopebond.tray</string>
+  <key>ProgramArguments</key>
+  <array><string>/Applications/Scopebond.app/Contents/MacOS/scopebond-tray</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>ProcessType</key><string>Interactive</string>
+</dict>
+</plist>

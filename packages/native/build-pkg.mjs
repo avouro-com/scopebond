@@ -1,6 +1,10 @@
 // Build the macOS installer package around the single executable (macOS only, Apple's own pkgbuild and productbuild).
 //
 //   node build-pkg.mjs [path/to/scopebond-agent]   → build/scopebond-agent-<version>-<arch>.pkg
+//   node build-pkg.mjs app <scopebond-tray> [out]  → build/Scopebond.app (the menu-bar app, signed ad hoc)
+//
+// With the menu-bar app (`trayApp`, or SCOPEBOND_TRAY_APP: a Scopebond.app built here, signed with the Developer ID in
+// the release), the package also installs /Applications/Scopebond.app and its LaunchAgent; without it, the agent alone.
 //
 // The executable is taken as given: build-sea.mjs signs it ad hoc, and the release workflow signs it with the Developer
 // ID first. With APPLE_INSTALLER_IDENTITY set (a "Developer ID Installer: …" identity in a keychain), the package is
@@ -18,6 +22,7 @@
 
 import { execFileSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { icns } from "./icon.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { installerVersion } from "./version.mjs";
@@ -34,6 +39,15 @@ export const PAYLOAD = [
   { path: "Library/LaunchDaemons/com.scopebond.updater.plist", from: join(macos, "com.scopebond.updater.plist"), mode: 0o644 },
   { path: "Library/Application Support/Scopebond/uninstall.sh", from: join(macos, "uninstall.sh"), mode: 0o755 },
 ];
+/** With the menu-bar app: the app itself and its LaunchAgent. */
+export const TRAY_APP = "Applications/Scopebond.app";
+export const TRAY_PAYLOAD = [
+  { path: "Library/LaunchAgents/com.scopebond.tray.plist", from: join(macos, "com.scopebond.tray.plist"), mode: 0o644 },
+];
+/** The menu-bar app's bundle identifier and program. */
+export const TRAY_BUNDLE_ID = "com.scopebond.tray";
+export const TRAY_PROGRAM = "scopebond-tray";
+
 /** The oldest macOS the package installs on: Node 22's own minimum. */
 export const MIN_MACOS = "11.0";
 
@@ -60,19 +74,64 @@ export function distributionXml(version, arch = process.arch) {
 `;
 }
 
+const xml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** The menu-bar app's Info.plist: no Dock icon or app menu (LSUIElement), the release's version. */
+export function trayInfoPlist(version) {
+  const entries = {
+    CFBundleIdentifier: TRAY_BUNDLE_ID, CFBundleName: "Scopebond", CFBundleDisplayName: "Scopebond", CFBundleExecutable: TRAY_PROGRAM,
+    CFBundleIconFile: "scopebond", CFBundlePackageType: "APPL", CFBundleShortVersionString: version, CFBundleVersion: version,
+    LSMinimumSystemVersion: MIN_MACOS, NSHumanReadableCopyright: "Copyright Avouro LLC. Apache-2.0.",
+  };
+  const lines = Object.entries(entries).map(([key, value]) => `  <key>${key}</key><string>${xml(value)}</string>`);
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+${lines.join("\n")}
+  <key>LSUIElement</key><true/>
+  <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+`;
+}
+
+/** Build Scopebond.app around the tray program (packages/tray: cargo build --release), signed ad hoc so Apple silicon
+ *  runs it; the release signs it with the Developer ID before it builds the package. */
+export function buildTrayApp(program, out = join(here, "build", "Scopebond.app"), { version } = {}) {
+  if (process.platform !== "darwin") throw new Error("the menu-bar app is built on macOS");
+  if (!existsSync(program)) throw new Error(`no tray program at ${program}; build it first (packages/tray: cargo build --release)`);
+  const v = installerVersion(version);
+  rmSync(out, { recursive: true, force: true });
+  mkdirSync(join(out, "Contents", "MacOS"), { recursive: true });
+  mkdirSync(join(out, "Contents", "Resources"), { recursive: true });
+  copyFileSync(program, join(out, "Contents", "MacOS", TRAY_PROGRAM));
+  chmodSync(join(out, "Contents", "MacOS", TRAY_PROGRAM), 0o755);
+  writeFileSync(join(out, "Contents", "Info.plist"), trayInfoPlist(v));
+  writeFileSync(join(out, "Contents", "Resources", "scopebond.icns"), icns());
+  execFileSync("codesign", ["--force", "--sign", "-", out], { stdio: "inherit" });
+  return out;
+}
+
 /** Build the package. `identity` signs it (default APPLE_INSTALLER_IDENTITY; none leaves it unsigned). */
-export function buildPkg(exe = join(here, "build", "scopebond-agent"), { version, identity = process.env.APPLE_INSTALLER_IDENTITY || null, arch = process.arch } = {}) {
+export function buildPkg(exe = join(here, "build", "scopebond-agent"), { version, identity = process.env.APPLE_INSTALLER_IDENTITY || null, arch = process.arch, trayApp = process.env.SCOPEBOND_TRAY_APP || null } = {}) {
   if (process.platform !== "darwin") throw new Error("the macOS installer package is built on macOS");
   if (!existsSync(exe)) throw new Error(`no executable at ${exe}; build it first (build-sea.mjs)`);
+  if (trayApp && !existsSync(join(trayApp, "Contents", "MacOS", TRAY_PROGRAM))) throw new Error(`no menu-bar app at ${trayApp}; build it first (build-pkg.mjs app)`);
   const v = installerVersion(version);
   const work = join(here, "build", "pkg");
   rmSync(work, { recursive: true, force: true });
   const root = join(work, "root");
-  for (const file of PAYLOAD) {
+  for (const file of [...PAYLOAD, ...(trayApp ? TRAY_PAYLOAD : [])]) {
     const to = join(root, file.path);
     mkdirSync(dirname(to), { recursive: true });
     copyFileSync(file.from ?? exe, to);
     chmodSync(to, file.mode);
+  }
+  // The app as it was signed (ditto keeps its signature, modes and links).
+  if (trayApp) {
+    mkdirSync(join(root, "Applications"), { recursive: true });
+    execFileSync("ditto", [trayApp, join(root, TRAY_APP)], { stdio: "inherit" });
   }
   const scripts = join(work, "scripts");
   mkdirSync(scripts, { recursive: true });
@@ -90,8 +149,28 @@ export function buildPkg(exe = join(here, "build", "scopebond-agent"), { version
   // mode they already have on the Mac (overwrite-permissions="false", pkgbuild's PackageInfo template, `--info`): an
   // install never takes over a /usr/local that another tool owns.
   writeFileSync(join(work, "PackageInfo"), `<?xml version="1.0" encoding="utf-8"?>\n<pkg-info overwrite-permissions="false" relocatable="false"/>\n`);
+  // The menu-bar app goes to /Applications whatever else is on the Mac: Installer would otherwise move it to where it
+  // finds another copy with the same identifier (a relocatable bundle, the default), and it always replaces the one there.
+  const components = [];
+  if (trayApp) {
+    writeFileSync(join(work, "components.plist"), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+  <dict>
+    <key>RootRelativeBundlePath</key><string>${TRAY_APP}</string>
+    <key>BundleIsRelocatable</key><false/>
+    <key>BundleIsVersionChecked</key><false/>
+    <key>BundleHasStrictIdentifier</key><true/>
+    <key>BundleOverwriteAction</key><string>upgrade</string>
+  </dict>
+</array>
+</plist>
+`);
+    components.push("--component-plist", join(work, "components.plist"));
+  }
   // Every file owned by root (--ownership recommended), installed at / exactly where PAYLOAD says.
-  run("pkgbuild", ["--root", root, "--scripts", scripts, "--info", join(work, "PackageInfo"), "--identifier", PACKAGE_ID, "--version", v,
+  run("pkgbuild", ["--root", root, "--scripts", scripts, "--info", join(work, "PackageInfo"), ...components, "--identifier", PACKAGE_ID, "--version", v,
     "--install-location", "/", "--ownership", "recommended", join(work, "scopebond-agent.pkg")]);
   writeFileSync(join(work, "Distribution"), distributionXml(v, arch));
   const out = join(here, "build", `scopebond-agent-${v}-${ARCH[arch]}.pkg`);
@@ -101,5 +180,6 @@ export function buildPkg(exe = join(here, "build", "scopebond-agent"), { version
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  console.log(`built ${buildPkg(process.argv[2] ? resolve(process.argv[2]) : undefined)}`);
+  if (process.argv[2] === "app") console.log(`built ${buildTrayApp(resolve(process.argv[3]), process.argv[4] ? resolve(process.argv[4]) : undefined)}`);
+  else console.log(`built ${buildPkg(process.argv[2] ? resolve(process.argv[2]) : undefined)}`);
 }

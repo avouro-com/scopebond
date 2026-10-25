@@ -1,7 +1,7 @@
 [package]
 name = "scopebond-tray"
 version = "0.1.0"
-description = "The Scopebond tray for Windows: the icon, menu and status panel for the Scopebond Agent"
+description = "The Scopebond tray: the icon, menu and status panel for the Scopebond Agent (Windows tray, macOS menu bar)"
 authors = ["Avouro LLC"]
 license = "Apache-2.0"
 repository = "https://github.com/avouro-com/scopebond"

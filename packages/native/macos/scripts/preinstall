@@ -2,8 +2,10 @@
 # Before the package's files go in (an upgrade): stop the agent launchd runs for each person signed in to this Mac, so
 # the executable that starts again afterwards (postinstall) is the new one. Nothing here ever stops the install.
 LABEL=com.scopebond.agent
+TRAY=com.scopebond.tray
 
 for uid in $(/bin/ps -axo uid=,comm= | /usr/bin/awk '$1 != 0 && $2 ~ /\/loginwindow$/ { print $1 }' | /usr/bin/sort -u); do
+  /bin/launchctl bootout "gui/$uid/$TRAY" 2>/dev/null || true
   /bin/launchctl bootout "gui/$uid/$LABEL" 2>/dev/null || true
 done
 exit 0

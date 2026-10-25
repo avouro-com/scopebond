@@ -54,6 +54,7 @@ packages/**/.claude/
 packages/tray/target/
 packages/tray/dist/
 packages/tray/gen/
+packages/tray/icons/
 
 # Node compile cache the hook keeps beside its package (cli.ts)
 .compile-cache/

@@ -3,10 +3,15 @@
 // entry in Settings -> Apps use it; the tray carries the same icon from its own build.
 //
 //   node icon.mjs [out.ico]   → build/scopebond.ico
+//
+// On macOS it also makes the menu-bar app's .icns (`icns()`, with macOS's own iconutil).
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { deflateSync } from "node:zlib";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const ICON_SIZES = [16, 20, 24, 32, 40, 48, 64, 256];
@@ -105,6 +110,57 @@ export function ico(sizes = ICON_SIZES) {
     offset += images[i].length;
   });
   return Buffer.concat([dir, ...images]);
+}
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+const crc32 = (bytes) => {
+  let c = 0xffffffff;
+  for (const b of bytes) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+};
+
+/** A PNG of the icon at `size` (8-bit RGBA). */
+export function png(size) {
+  const rgba = render(size);
+  const raw = Buffer.alloc((size * 4 + 1) * size);
+  for (let y = 0; y < size; y++) {
+    raw[y * (size * 4 + 1)] = 0;
+    Buffer.from(rgba.buffer, rgba.byteOffset + y * size * 4, size * 4).copy(raw, y * (size * 4 + 1) + 1);
+  }
+  const chunk = (type, data) => {
+    const head = Buffer.alloc(8);
+    head.writeUInt32BE(data.length, 0);
+    head.write(type, 4, "latin1");
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), data])), 0);
+    return Buffer.concat([head, data, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr.set([8, 6, 0, 0, 0], 8);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+}
+
+/** The menu-bar app's icon as an .icns (macOS only: iconutil turns the iconset's PNGs into one file). */
+export function icns() {
+  const work = mkdtempSync(join(tmpdir(), "sb-icns-"));
+  try {
+    const set = join(work, "scopebond.iconset");
+    mkdirSync(set);
+    for (const s of [16, 32, 128, 256, 512]) {
+      writeFileSync(join(set, `icon_${s}x${s}.png`), png(s));
+      writeFileSync(join(set, `icon_${s}x${s}@2x.png`), png(s * 2));
+    }
+    execFileSync("/usr/bin/iconutil", ["-c", "icns", set, "-o", join(work, "scopebond.icns")]);
+    return readFileSync(join(work, "scopebond.icns"));
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
 }
 
 /** Write the icon to `file` (build/scopebond.ico by default) and return its path. */

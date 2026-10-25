@@ -7,9 +7,11 @@
 // it recovers.
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { windowsSystemProgram } from "@scopebond/gateway/node";
 import { AGENT_FILE, TOKEN_HEADER } from "./ipc.js";
 import type { Health, HealthLevel } from "./health.js";
+import { MAC_TRAY_APP } from "./native-update.js";
 
 const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
 
@@ -164,9 +166,9 @@ export function startTray(home: string, agentPid = process.pid): ChildProcess | 
 
 /** macOS and Linux: notify when the person must act (red: not connected, sign in again, the delivery queue cannot be opened),
  *  and once when that is over. Amber is a chore Scopebond does by itself (records waiting, a check it runs again): quiet.
- *  Returns whether it notified. */
-export function notifyChange(previous: HealthLevel | null, health: Health, run: typeof spawn = spawn): boolean {
-  if (process.platform === "win32" || previous === null || previous === health.level) return false;
+ *  Beside the macOS menu-bar app, the app notifies instead, as the tray does on Windows. Returns whether it notified. */
+export function notifyChange(previous: HealthLevel | null, health: Health, run: typeof spawn = spawn, menuBarApp: boolean = process.platform === "darwin" && existsSync(MAC_TRAY_APP)): boolean {
+  if (process.platform === "win32" || menuBarApp || previous === null || previous === health.level) return false;
   if (health.level === "amber" || (health.level === "green" && previous !== "red")) return false;
   const text = health.level === "green" ? "Working again: " + health.headline : health.headline + (health.hint ? `. ${health.hint}` : "");
   try {

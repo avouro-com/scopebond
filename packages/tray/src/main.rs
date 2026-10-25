@@ -1,5 +1,5 @@
-// The Scopebond tray for Windows: the icon, its menu and the status panel, drawn from the agent's tray model. No console
-// window, ever.
+// The Scopebond tray: the icon, its menu and the status panel, drawn from the agent's tray model. On Windows the
+// notification-area icon, with no console window, ever; on macOS the menu-bar icon of an app with no Dock icon.
 #![windows_subsystem = "windows"]
 
 use std::panic::AssertUnwindSafe;
@@ -18,7 +18,7 @@ use scopebond_tray::model::{LiveQuestion, Notifications, TrayAction, TrayAnswer}
 use scopebond_tray::notify::{update_toast, Kind, Notifier, RequestWatch, Situation, Toast};
 use scopebond_tray::panel::{self, Area, PANEL_HEIGHT, PANEL_WIDTH};
 use scopebond_tray::supervise::{self, Decision, Observation, Supervisor};
-use scopebond_tray::{log, win};
+use scopebond_tray::{log, os};
 use serde_json::{json, Value};
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -143,10 +143,16 @@ fn icon_image(state: IconState) -> Image<'static> {
     Image::new_owned(icon::render(state, 32), 32, 32)
 }
 
+#[cfg(target_os = "macos")]
 fn autostart_state() -> Autostart {
-    if win::read_string(true, win::RUN_KEY, "Scopebond").is_some() {
+    os::autostart_state()
+}
+
+#[cfg(windows)]
+fn autostart_state() -> Autostart {
+    if os::read_string(true, os::RUN_KEY, "Scopebond").is_some() {
         Autostart::Managed
-    } else if win::read_string(false, win::RUN_KEY, "Scopebond").is_some() {
+    } else if os::read_string(false, os::RUN_KEY, "Scopebond").is_some() {
         Autostart::On
     } else {
         Autostart::Off
@@ -179,13 +185,17 @@ fn start_with_windows_choice(home: &Path) -> Option<bool> {
 }
 
 fn set_start_with_windows(home: &Path, on: bool) -> bool {
+    #[cfg(windows)]
     let done = if on {
         std::env::current_exe()
-            .map(|exe| win::set_user_string(win::RUN_KEY, "Scopebond", &format!("\"{}\"", exe.display())))
+            .map(|exe| os::set_user_string(os::RUN_KEY, "Scopebond", &format!("\"{}\"", exe.display())))
             .unwrap_or(false)
     } else {
-        win::delete_user_value(win::RUN_KEY, "Scopebond")
+        os::delete_user_value(os::RUN_KEY, "Scopebond")
     };
+    // macOS: the app's own LaunchAgent, turned on or off for this person in launchd.
+    #[cfg(target_os = "macos")]
+    let done = os::set_autostart(on);
     save_tray_setting(home, "start_with_windows", json!(on));
     done
 }
@@ -236,17 +246,32 @@ fn create_tray(app: &AppHandle, shared: &Arc<Shared>) -> tauri::Result<tauri::tr
 }
 
 /// The agent program: `scopebond-agent.exe` beside the tray in the install folder.
+#[cfg(windows)]
 fn agent_program() -> Option<PathBuf> {
     std::env::current_exe().ok().map(|p| p.with_file_name("scopebond-agent.exe"))
 }
 
+/// The agent program the macOS package installs.
+#[cfg(target_os = "macos")]
+fn agent_program() -> Option<PathBuf> {
+    Some(PathBuf::from(os::AGENT_PROGRAM))
+}
+
 /// Start `scopebond-agent.exe run` with no console window (supervise::agent_command: never with NODE_OPTIONS). It writes its
 /// own log and leaves the tray to this program.
-fn start_agent(program: &Path, home: &Path) -> std::io::Result<Child> {
+#[cfg(windows)]
+fn start_agent(program: &Path, home: &Path) -> std::io::Result<Option<Child>> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let _ = std::fs::create_dir_all(home);
-    supervise::agent_command(program, home).creation_flags(CREATE_NO_WINDOW).spawn()
+    supervise::agent_command(program, home).creation_flags(CREATE_NO_WINDOW).spawn().map(Some)
+}
+
+/// macOS: launchd runs the agent from its LaunchAgent, so the tray asks launchd to start it (`launchctl kickstart`) and
+/// never starts a second one beside it.
+#[cfg(target_os = "macos")]
+fn start_agent(_program: &Path, _home: &Path) -> std::io::Result<Option<Child>> {
+    if os::start_agent() { Ok(None) } else { Err(std::io::Error::other("launchd did not start the agent's LaunchAgent")) }
 }
 
 /// Another agent is starting: its lock is fresh and its process alive, and it is not the tray's own child.
@@ -254,7 +279,7 @@ fn other_agent_starting(home: &Path, own: Option<u32>) -> bool {
     let Ok(text) = std::fs::read_to_string(home.join("agent.lock")) else { return false };
     let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     match supervise::read_lock(&text, now_ms) {
-        Some((pid, true)) => Some(pid) != own && win::process_alive(pid),
+        Some((pid, true)) => Some(pid) != own && os::process_alive(pid),
         _ => false,
     }
 }
@@ -276,7 +301,7 @@ fn end_hung_agent(child: &mut Option<Child>, pid: u32, program: Option<&Path>) -
         }
     }
     let program = program.ok_or("there is no agent program beside the tray")?;
-    win::end_if_running(pid, program, Duration::from_secs(10))
+    os::end_if_running(pid, program, Duration::from_secs(10))
 }
 
 /// Keep the agent running (every rule is in supervise.rs). It looks every second while the agent is not answering, and
@@ -338,10 +363,11 @@ fn supervise_agent(shared: &Arc<Shared>) {
             if start {
                 if let Some(program) = &program {
                     match start_agent(program, &home) {
-                        Ok(c) => {
+                        Ok(Some(c)) => {
                             log::line(&format!("started the agent (process {})", c.id()));
                             child = Some(c);
                         }
+                        Ok(None) => log::line("asked launchd to start the agent"),
                         Err(e) => {
                             log::line(&format!("could not start the agent: {e}"));
                             sup.start_failed(now);
@@ -510,6 +536,7 @@ fn open_question(shared: &Arc<Shared>, action_id: &str) {
 /// A Windows notification under the installer's AppUserModelID (the Start-menu entry carries it). Shown on its own
 /// thread; a failure (no Start-menu entry, notifications turned off in Windows) is only logged. A block notification opens
 /// the panel when it is clicked, and its *Unblock…* button opens the panel on that block's form.
+#[cfg(windows)]
 fn show_toast(toast: Toast, panel: Option<(AppHandle, Arc<Shared>)>) {
     // Each block notification is counted for the day (the agent sends the day's counts with its rules check: fatigue).
     if matches!(toast.kind, Kind::Block) {
@@ -572,6 +599,27 @@ fn show_toast(toast: Toast, panel: Option<(AppHandle, Arc<Shared>)>) {
         match t.show() {
             Ok(()) => log::line(&format!("notified: {}", toast.text)),
             Err(e) => log::line(&format!("could not notify ({e}): {}", toast.text)),
+        }
+    });
+}
+
+/// macOS: a notification in Notification Center (no buttons there: the menu-bar icon opens the panel, with the block's
+/// Unblock… form and Restart it). Each block notification is counted for the day, as on Windows.
+#[cfg(target_os = "macos")]
+fn show_toast(toast: Toast, panel: Option<(AppHandle, Arc<Shared>)>) {
+    if matches!(toast.kind, Kind::Block) {
+        if let Some((_, shared)) = panel.as_ref() {
+            let s = shared.clone();
+            thread::spawn(move || {
+                let _ = s.client.call("POST", "/fatigue", Some(&json!({ "kind": "toast" })), Duration::from_secs(5));
+            });
+        }
+    }
+    thread::spawn(move || {
+        if os::notify(&toast.title, &toast.text) {
+            log::line(&format!("notified: {}", toast.text));
+        } else {
+            log::line(&format!("could not notify: {}", toast.text));
         }
     });
 }
@@ -715,7 +763,7 @@ fn get_help(shared: &Arc<Shared>) {
     let link = link_name(*lock(&shared.link));
     let agent = shared.client.call("GET", "/support", None, Duration::from_secs(15)).map_err(|e| e.to_string());
     let report = panel::help_report(SCOPEBOND_VERSION, link, agent);
-    let copied = win::copy_text(&serde_json::to_string_pretty(&report).unwrap_or_default());
+    let copied = os::copy_text(&serde_json::to_string_pretty(&report).unwrap_or_default());
     let opened = std::process::Command::new("explorer.exe").arg(panel::HELP_URL).spawn().is_ok();
     *lock(&shared.busy) = None;
     shared.set_note(match (copied, opened) {
@@ -738,7 +786,7 @@ fn about(shared: &Arc<Shared>) {
         field(&status["identity"]["installation_id"]),
         shared.client.home().display(),
     );
-    win::message("About Scopebond", &text);
+    os::message("About Scopebond", &text);
 }
 
 fn dispatch(app: &AppHandle, shared: &Arc<Shared>, command: Command) {
@@ -759,9 +807,9 @@ fn dispatch(app: &AppHandle, shared: &Arc<Shared>, command: Command) {
                 Autostart::Off => true,
             };
             let done = set_start_with_windows(shared.client.home(), on);
-            log::line(&format!("start with Windows: {} ({})", if on { "on" } else { "off" }, if done { "saved" } else { "not saved" }));
+            log::line(&format!("{}: {} ({})", menu::AUTOSTART_LABEL, if on { "on" } else { "off" }, if done { "saved" } else { "not saved" }));
             if !done {
-                shared.set_note("Start with Windows could not be changed".into());
+                shared.set_note(format!("{} could not be changed", menu::AUTOSTART_LABEL));
             }
             shared.wake();
         }
@@ -917,8 +965,9 @@ fn panel_state(shared: State<'_, Arc<Shared>>) -> Value {
         "note": note,
         "busy": *lock(&shared.busy),
         "version": SCOPEBOND_VERSION,
-        // For the panel's Settings: Start with Windows as the menu shows it.
+        // For the panel's Settings: Start with Windows (Open at Login on macOS) as the menu shows it.
         "autostart": autostart_state().as_str(),
+        "autostartLabel": menu::AUTOSTART_LABEL,
         // A notification's Unblock…: the block whose form to open (once).
         "openBlock": lock(&shared.open_block).take(),
         // What came of the last answer in the panel's form, for a while.
@@ -1085,9 +1134,16 @@ fn main() {
     let home = scopebond_home().unwrap_or_else(std::env::temp_dir);
     log::init(&home);
     log::line(&format!("Scopebond {} tray starting for {} (tray crate {})", SCOPEBOND_VERSION, home.display(), env!("CARGO_PKG_VERSION")));
-    if start_with_windows_choice(&home) == Some(false) && win::read_string(false, win::RUN_KEY, "Scopebond").is_some() {
-        win::delete_user_value(win::RUN_KEY, "Scopebond");
+    #[cfg(windows)]
+    if start_with_windows_choice(&home) == Some(false) && os::read_string(false, os::RUN_KEY, "Scopebond").is_some() {
+        os::delete_user_value(os::RUN_KEY, "Scopebond");
         log::line("start with Windows stays off, as chosen");
+    }
+    // An upgrade or a new install of the package opens the app at login again: it stays off when the person had turned it
+    // off.
+    #[cfg(target_os = "macos")]
+    if start_with_windows_choice(&home) == Some(false) && os::autostart_state() == Autostart::On && os::set_autostart(false) {
+        log::line("open at login stays off, as chosen");
     }
     let shared = Arc::new(Shared::new(AgentClient::new(home)));
     let open_at_start = std::env::args().any(|a| a == "--status");
@@ -1105,6 +1161,9 @@ fn main() {
         .manage(shared.clone())
         .invoke_handler(tauri::generate_handler![panel_state, panel_action, panel_block, panel_live, panel_stop, panel_feedback, panel_hold, panel_command, panel_ready, panel_close])
         .setup(move |app| {
+            // A menu-bar app: no Dock icon and no app menu.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             let handle = app.handle().clone();
             if let Err(e) = create_tray(&handle, &shared) {
                 log::line(&format!("the tray icon could not be added yet: {e}"));
