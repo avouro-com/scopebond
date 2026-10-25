@@ -16,11 +16,44 @@ requests. It also checks MCP tool calls and tools inside agent frameworks. Runs 
 Windows, macOS and Linux. The engine is open source under Apache-2.0, and core
 protection is never behind a paid plan.
 
-[Get started](#get-started) ·
+[Try it locally](#try-it-locally-no-account) ·
+[Scopebond Cloud](#connect-to-scopebond-cloud) ·
 [Explore the sample workspace](https://cloud.scopebond.com/app/sample) ·
 [Docs](https://scopebond.com/documentation)
 
-## Get started
+## Try it locally, no account
+
+```bash
+npm i -g @scopebond/hook@latest
+scopebond install
+```
+
+That is all. `install` sets Scopebond up once for your computer: it configures Claude
+Code and detects Cursor, Codex and the GitHub Copilot CLI (choose one with `--cursor`,
+`--codex` or `--copilot`). For Codex, open `/hooks`, review Scopebond and choose
+**Trust** once. Needs Node.js 22.13 or later.
+
+Every rule starts in Monitor: it records what it would block and blocks nothing until
+you switch it to Block. Records are signed and stay on this computer.
+
+```bash
+scopebond status                # what is configured
+scopebond rules                 # the rules, in plain words
+scopebond rules enforce <rule>  # switch one rule to Block
+scopebond log                   # recent decisions
+scopebond verify                # check the stored records offline
+```
+
+These commands are for macOS and Linux. On Windows, use the
+[signed installer](#windows), which connects to a workspace and runs the same commands
+as `scopebond-agent hook <command>`. See the [hook README](packages/hook) for each
+tool's details, a per-project setup (`init`) and how to uninstall.
+
+## Connect to Scopebond Cloud
+
+Scopebond Cloud is the hosted workspace: one set of rules for every computer,
+protection packs kept up to date, Safe Install checks on the packages agents install,
+approvals, and history for audits. It is free for one agent.
 
 ### Windows
 
@@ -62,27 +95,6 @@ It prints a short code and an approval link for the workspace owner. Leave out
 `--copilot` to connect Claude Code, or use `--cursor` or `--codex`. For Codex, review
 Scopebond in `/hooks`, choose **Trust**, and start a new task. See the
 [hook README](packages/hook) for each tool's details.
-
-### Local only, no account
-
-```bash
-npm install -g @scopebond/hook@latest
-scopebond install
-scopebond status
-```
-
-`install` configures Claude Code and detects Cursor, Codex and the GitHub Copilot CLI;
-choose one with `--cursor`, `--codex` or `--copilot`. Records stay on this computer.
-For one project's setup:
-
-```bash
-npx -y @scopebond/hook@latest init          # Claude Code; add --cursor, --codex or --copilot
-npx -y @scopebond/hook@latest log           # inspect recent decisions
-npx -y @scopebond/hook@latest verify        # check stored records offline
-```
-
-In unattended setup, pass `--yes` to `init` after reviewing the configuration you are
-authorizing.
 
 > **Open source and hosted.** Everything in this repository is free, Apache-2.0
 > open-source software, and it works without an account: the engine that checks and

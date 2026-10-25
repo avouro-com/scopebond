@@ -15,7 +15,7 @@ import {
   COPILOT_EVENTS, COPILOT_TIMEOUT_SEC, COPILOT_DECISION_DEADLINE_MS, copilotDetected, powershellHookCommand,
 } from "../dist/index.js";
 import { ENFORCE } from "./enforce-all.mjs";
-import { GUARDRAIL_WRITE_PATTERN, under, named } from "../dist/runtime.js";
+import { GUARDRAIL_WRITE_PATTERN, SHELL_STARTUP_FLOOR, under, named } from "../dist/runtime.js";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const LABEL = "cooperative · prevents if honored · a hook timeout fails open in Copilot";
@@ -321,9 +321,9 @@ test("a policy written before Copilot was covered gets Copilot's hook settings o
   const copilotPart = under("\\.copilot/hooks") + named("\\.copilot/settings\\.json") + named("\\.copilot/mcp-config\\.json") + under("\\.github/hooks")
     + named("\\.github/copilot/settings\\.json") + named("\\.github/copilot/settings\\.local\\.json");
   assert.ok(GUARDRAIL_WRITE_PATTERN.includes(copilotPart), "the always-on floor covers them");
-  // The floor as it was then: without Copilot's settings, and still holding the sub-agent definitions and .mcp.json, which
-  // have since moved to the configuration rule.
-  const before = GUARDRAIL_WRITE_PATTERN.replace(copilotPart, "")
+  // The floor as it was then: without Copilot's settings or the shell startup files, and still holding the sub-agent
+  // definitions and .mcp.json, which have since moved to the configuration rule.
+  const before = GUARDRAIL_WRITE_PATTERN.replace(copilotPart, "").replace(SHELL_STARTUP_FLOOR, "")
     .replace(under("\\.claude/hooks"), under("\\.claude/hooks") + under("\\.claude/agents"))
     .replace(named("\\.codex/config\\.toml"), named("\\.codex/config\\.toml") + named("\\.mcp\\.json"));
   const policy = compile(defaultRules(), "kid");

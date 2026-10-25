@@ -48,9 +48,10 @@
     "@scopebond/sdk": "workspace:^"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "prepublishOnly": "tsc -p tsconfig.json",
-    "test": "tsc -p tsconfig.json && node --test --test-timeout=300000 test/*.test.mjs test/*.test.js && node --test --test-timeout=1800000 test/windows-journey.run.mjs"
+    "build": "tsc -p tsconfig.json && node scripts/bundle-cli.mjs",
+    "prepublishOnly": "tsc -p tsconfig.json && node scripts/bundle-cli.mjs",
+    "bench": "node scripts/bench-hook.mjs",
+    "test": "tsc -p tsconfig.json && node scripts/bundle-cli.mjs && node --test --test-timeout=300000 test/*.test.mjs test/*.test.js && node --test --test-timeout=1800000 test/windows-journey.run.mjs"
   },
   "publishConfig": {
     "access": "public"
@@ -58,6 +59,7 @@
   "devDependencies": {
     "@scopebond/fake-cloud": "workspace:*",
     "@scopebond/verify": "workspace:*",
+    "esbuild": "0.28.2",
     "fast-check": "^4.10.2"
   }
 }
