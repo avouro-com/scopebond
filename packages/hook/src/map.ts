@@ -1118,6 +1118,20 @@ function launchesHarness(sc: SimpleCommand): boolean {
 // The variables that move a coding agent's config folder, and with it the hooks it loads: its own, the XDG base folder, and the
 // home folder (`~/.claude`, `~/.codex`, `~/.cursor` and `~/.copilot` sit there).
 const HARNESS_CONFIG_VARS = ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "CURSOR_CONFIG_DIR", "COPILOT_HOME", "XDG_CONFIG_HOME", "HOME", "USERPROFILE"];
+// The variables that move Scopebond's own folder, and with it the rules a hook call reads: a coding agent started with one of
+// them set, or a session that inherits one, runs under rules of the agent's choosing.
+const SCOPEBOND_CONFIG_VARS = ["SCOPEBOND_HOOK_DIR", "SCOPEBOND_HOME"];
+const MOVES_CONFIG = new Set([...HARNESS_CONFIG_VARS, ...SCOPEBOND_CONFIG_VARS]);
+/** Whether a command sets a variable for every later session, not just the commands after it in this call: Windows `setx`,
+ *  macOS `launchctl setenv`, and PowerShell's `[Environment]::SetEnvironmentVariable(…, 'User' | 'Machine')`. */
+function setsForLaterSessions(sc: SimpleCommand): boolean {
+  if (sc.opaque) return false;
+  const prog = canonProgram(sc.program);
+  if (prog === "setx") return true;
+  if (prog === "launchctl") return sc.argv.filter((a) => !a.startsWith("-"))[0]?.toLowerCase() === "setenv";
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear: one run of spaces, then optional fixed text and a fixed word
+  return /SetEnvironmentVariable/i.test(sc.program) && /,\s*['"]?(?:\[(?:System\.)?EnvironmentVariableTarget\]::)?(?:User|Machine)\b/i.test(sc.raw);
+}
 // Commands that set the variables they are given for the commands after them.
 const EXPORTERS = new Set(["export", "declare", "typeset", "local", "readonly"]);
 const POWERSHELL_ENV_SETTERS = new Set(["set-item", "si", "new-item", "ni", "set-content", "sc", "add-content", "ac"]);
@@ -1152,6 +1166,10 @@ function variablesSet(sc: SimpleCommand): VariableSet[] {
   };
   if (EXPORTERS.has(prog)) return operands.map((w) => (w.includes("=") ? named(w, null) : { name: w.toUpperCase(), value: null, keep: true }));
   if (prog === "set") return operands[0] !== undefined ? [named(operands[0], operands[1] ?? null)] : [];
+  if (prog === "launchctl") {
+    const words = operands.slice(1);
+    return operands[0]?.toLowerCase() === "setenv" && words[0] !== undefined ? [{ name: words[0].toUpperCase(), value: words[1] ?? null }] : [];
+  }
   if (prog === "setenv" || prog === "setx") {
     const words = operands.filter((w) => !w.startsWith("/"));
     return words[0] !== undefined ? [{ name: words[0].toUpperCase(), value: words[1] ?? null }] : [];
@@ -1183,14 +1201,16 @@ function variablesSet(sc: SimpleCommand): VariableSet[] {
  *  a coding agent with its config folder moved — by its own prefix (`CLAUDE_CONFIG_DIR=… claude`), an enclosing command's
  *  (`CODEX_HOME=… sh -c 'codex …'`) or an earlier assignment (`export HOME=… && claude`) — and the git configuration the
  *  environment gives each git command beyond its own prefix. A variable set after the agent ran, or for another program, counts
- *  for nothing. */
+ *  for nothing — except one that moves a config folder for every later session (`setx`, `launchctl setenv`, a User or Machine
+ *  `SetEnvironmentVariable`): that is a switch-off on its own. */
 function scanCall(commands: SimpleCommand[]): { switchOff: boolean; gitConfigs: Map<SimpleCommand, string[]> } {
   const env = new Map<string, string | null>();
   const gitConfigs = new Map<SimpleCommand, string[]>();
   let switchOff = false;
   for (const sc of commands) {
     const own = assignmentsOf(sc.assigns ?? []);
-    if (launchesHarness(sc) && HARNESS_CONFIG_VARS.some((n) => own.has(n) || env.has(n))) switchOff = true;
+    if (launchesHarness(sc) && [...MOVES_CONFIG].some((n) => own.has(n) || env.has(n))) switchOff = true;
+    if (setsForLaterSessions(sc) && variablesSet(sc).some(({ name }) => MOVES_CONFIG.has(name))) switchOff = true;
     if (env.size && !sc.opaque && canonProgram(sc.program) === "git") {
       const configs = gitEnvConfigs(new Map([...env].filter(([n]) => !own.has(n))));
       if (configs.length) gitConfigs.set(sc, configs);
