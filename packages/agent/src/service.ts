@@ -141,6 +141,9 @@ export interface ServiceOptions {
   cycleLimitMs?: number;
   /** How this agent was installed (default: found out; tests name one). */
   installKind?: InstallKind;
+  /** Whether an install for this user updates itself with the signed installer (default: on Windows only; on macOS a new
+   *  package updates it, so it never takes the Windows installer's path). */
+  nativeUpdates?: boolean;
   /** A signed install that was never connected starts its first sign-in by itself, once (default: on for a signed
    *  install, off from npm). */
   autoSignIn?: boolean;
@@ -399,6 +402,7 @@ export function noteUpdateOutcome(dir: string, log: (line: string) => void, runn
 export async function startService(options: ServiceOptions): Promise<Service> {
   const log = options.log ?? ((line: string) => console.log(`${new Date().toISOString()} ${line}`));
   const kind = options.installKind ?? installKind();
+  const nativeUpdates = options.nativeUpdates ?? process.platform === "win32";
   const nativeTray = process.platform === "win32" ? nativeTrayPath() : null;
   // The signed install takes over from an npm install of the agent first: the npm agent is stopped and its sign-in entry
   // retired before this one looks for a running agent or takes the lock, so the npm one never keeps it from starting.
@@ -611,6 +615,9 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       if (newer && kind === "per-machine") {
         // Installed for every user: the organisation that deployed it updates it.
         log(`the workspace recommends the Scopebond Agent ${newer}; this install is updated by your organization`);
+      } else if (newer && kind === "per-user" && !nativeUpdates) {
+        // The signed executable on macOS: a new package updates it; the Windows installer is never fetched here.
+        log(`the workspace recommends the Scopebond Agent ${newer}; install its package to update this computer`);
       } else if (newer && recentlyFailedUpdate(options.dir, newer)) {
         log(`the Scopebond Agent ${newer} did not install or start here earlier; staying on ${current} for now`);
       } else if (newer && kind === "per-user" && pending && pending.version === newer && Date.now() - pending.at < UPDATE_PENDING_MS) {
@@ -697,7 +704,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const retryUpdateWhenDue = () => {
     if (updateRetryTimer) { clearTimeout(updateRetryTimer); updateRetryTimer = null; }
     const failed = failedUpdate(options.dir);
-    if (stopped || options.maintenance === false || !failed || kind === "per-machine") return;
+    if (stopped || options.maintenance === false || !failed || kind === "per-machine" || (kind === "per-user" && !nativeUpdates)) return;
     const wait = failed.retry_at - Date.now() + 1_000;
     updateRetryTimer = setTimeout(() => { updateRetryTimer = null; if (!stopped) void maintain(); }, Math.max(wait, 1_000));
     updateRetryTimer.unref?.();
@@ -857,7 +864,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   /** What this install can update to, for the tray: from npm, the workspace's agent and hook (as its rules check said);
    *  the signed install, only the signed build the workspace names (the hook is inside it); for every user, nothing. */
   const offeredVersions = (): { recommendedAgent: string | null; recommendedHook: string | null } => {
-    if (kind === "per-machine") return { recommendedAgent: null, recommendedHook: null };
+    if (kind === "per-machine" || (kind === "per-user" && !nativeUpdates)) return { recommendedAgent: null, recommendedHook: null };
     if (kind === "per-user") return { recommendedAgent: lastTarget?.policy === "recommended" ? lastTarget.native_agent : null, recommendedHook: null };
     const meta = readMeta(options.dir);
     return { recommendedAgent: meta.recommended?.agent ?? null, recommendedHook: meta.recommended?.hook ?? null };

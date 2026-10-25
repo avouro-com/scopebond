@@ -629,6 +629,10 @@ jobs:
           title="Scopebond Agent ${VERSION} for Windows (signed)"
           notes="The Scopebond Agent and hook as one signed file, the signed Scopebond tray, and the signed installer with both (per user by default; ALLUSERS=1 for every user; the tray starts at sign-in and keeps the agent running), plus the engine bundle with its signed manifest, from which signed installs update their hook without a new installer. Avouro LLC, Azure Artifact Signing, timestamped. Check it: SHA256SUMS, the CycloneDX SBOM, and the build provenance attestation (gh attestation verify scopebond-agent-${VERSION}-x64.exe --repo ${REPO})."
           if [ "$MACOS" = true ]; then
+            # SHA256SUMS lists every file of the release, the macOS ones too (sign-installer wrote it before they arrived).
+            (cd out && find . -maxdepth 1 -type f ! -name SHA256SUMS -exec basename {} \; | LC_ALL=C sort | xargs sha256sum > "$RUNNER_TEMP/SHA256SUMS")
+            mv "$RUNNER_TEMP/SHA256SUMS" out/SHA256SUMS
+            cat out/SHA256SUMS
             title="Scopebond Agent ${VERSION} for Windows and macOS (signed)"
             notes="${notes} For macOS, for Apple silicon (arm64) and Intel (x86_64): the installer package scopebond-agent-${VERSION}-<arch>.pkg (/usr/local/bin/scopebond-agent for every user, and a LaunchAgent that starts it at each sign-in; remove it with: sudo \"/Library/Application Support/Scopebond/uninstall.sh\"), and the bare executable scopebond-agent-macos-<arch>.zip, Developer ID signed and notarized (the package stapled). Check them: spctl --assess --type install <pkg>, and gh attestation verify <file> --repo ${REPO}."
           fi

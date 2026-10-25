@@ -85,7 +85,9 @@ Node.js nor npm: one signed program is both the agent and the hook, and the Scop
 The same executable in a macOS installer package (`packages/native`, `build-pkg.mjs`): `/usr/local/bin/scopebond-agent`
 for every user of the Mac, and a LaunchAgent that runs `scopebond-agent run` as each person who signs in (the agent's own
 autostart label, so it never runs twice). It counts as installed for every user: it does not update itself, and the
-organization or person who installed it installs the next package. `sudo "/Library/Application Support/Scopebond/uninstall.sh"`
+organization or person who installed it installs the next package. The signed executable run from anywhere else on a Mac
+does not update itself either: it never fetches the Windows installer, offers no update in the tray, and says in its log
+that a newer package is recommended. `sudo "/Library/Application Support/Scopebond/uninstall.sh"`
 removes it, running `scopebond-agent uninstall` first as the person removing it; `--purge` removes the Scopebond folder
 too.
 
