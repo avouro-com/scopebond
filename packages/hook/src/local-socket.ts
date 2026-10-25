@@ -3,12 +3,15 @@
 // Scopebond folder, but Windows lets other accounts list pipe names and open the pipe for reading, so what protects each
 // request is the agent's token, which is always sent.
 
-import { request } from "node:http";
+// `node:http` is taken when a request is made, not imported: importing it as a module reads every one of its exports,
+// which loads Node's whole fetch implementation (about 10 ms), and the hook runs on every tool call, most of which never
+// talk to the agent.
 
 /** One JSON request over a pipe or socket. Resolves with the status and parsed body, or null when nothing answers. */
 export function requestOverSocket(socketPath: string, method: "GET" | "POST", path: string, headers: Record<string, string>, body: unknown, timeoutMs: number): Promise<{ status: number; body: unknown } | null> {
   return new Promise((resolve) => {
     const payload = body === undefined ? undefined : JSON.stringify(body);
+    const { request } = process.getBuiltinModule("node:http");
     const req = request({
       socketPath, method, path, timeout: timeoutMs,
       headers: { ...headers, ...(payload !== undefined ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}) },

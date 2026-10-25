@@ -167,9 +167,28 @@ const GUARDRAIL_WRITE_PATTERN_NO_INSTALL = "^" + GUARDRAIL_WRITE.join("") + ".+"
 // rule (protect-write, `PROTECTED_WRITE`), which a workspace can relax. Git hooks, git config and Husky run code: they stay.
 const MOVED_TO_CONFIG = new Set([under("\\.claude/agents"), named("\\.mcp\\.json")]);
 const GUARDRAIL_FLOOR = GUARDRAIL_WRITE.filter((p) => !MOVED_TO_CONFIG.has(p));
+// The files a shell or PowerShell reads at every start, and the per-person environment files. A line the coding agent adds there
+// runs in every later session, the next coding agent's included: `export SCOPEBOND_HOOK_DIR=…` or `export HOME=…` in `~/.zshrc`
+// points the next session's hook at rules the agent wrote, or its coding agent at hook settings without Scopebond. Matched by
+// name wherever they sit, so a dotfiles repository's copies are covered too: the person edits those themselves.
+const SHELL_STARTUP_WRITE = [
+  named("\\.bashrc"), named("\\.bash_profile"), named("\\.bash_login"), named("\\.profile"), named("\\.zshrc"), named("\\.zshenv"),
+  named("\\.zprofile"), named("\\.zlogin"), named("\\.kshrc"), named("\\.cshrc"), named("\\.tcshrc"), named("\\.pam_environment"),
+  named("\\.config/fish/config\\.fish"), under("\\.config/fish/conf\\.d"), under("\\.config/environment\\.d"),
+  named("etc/profile"), under("etc/profile\\.d"), named("etc/environment"), named("etc/zshenv"), named("etc/zshrc"),
+  named("etc/zprofile"), named("etc/bashrc"), named("etc/bash\\.bashrc"),
+  named("PowerShell/Microsoft\\.PowerShell_profile\\.ps1"), named("PowerShell/Microsoft\\.VSCode_profile\\.ps1"), named("PowerShell/profile\\.ps1"),
+  named("WindowsPowerShell/Microsoft\\.PowerShell_profile\\.ps1"), named("WindowsPowerShell/Microsoft\\.VSCode_profile\\.ps1"),
+  named("WindowsPowerShell/profile\\.ps1"),
+];
+/** The shell startup files' part of the floor, as bare lookaheads. */
+export const SHELL_STARTUP_FLOOR = SHELL_STARTUP_WRITE.join("");
+/** The floor before it covered the shell startup files: upgraded on load. */
+const GUARDRAIL_WRITE_PATTERN_NO_STARTUP = "^" + GUARDRAIL_FLOOR.join("") + INSTALL_FOLDER + ".+";
 /** The write protection that is always on, whoever manages the rules: the hook's own settings and the coding agents' hook
- *  settings, the hooks git runs, and the installed program. A workspace can relax configuration writes; never these. */
-export const GUARDRAIL_WRITE_PATTERN = "^" + GUARDRAIL_FLOOR.join("") + INSTALL_FOLDER + ".+";
+ *  settings, the hooks git runs, the installed program, and the shell startup files. A workspace can relax configuration
+ *  writes; never these. */
+export const GUARDRAIL_WRITE_PATTERN = "^" + [...GUARDRAIL_FLOOR, ...SHELL_STARTUP_WRITE].join("") + INSTALL_FOLDER + ".+";
 /** The current floor without the install folder: weaker than the floor, so upgraded to it. */
 const GUARDRAIL_FLOOR_NO_INSTALL = "^" + GUARDRAIL_FLOOR.join("") + ".+";
 /** The always-on floor as bare lookaheads, for a pattern that must also refuse these paths (the hook's own folder included). */
@@ -190,7 +209,7 @@ export function selfProtectionClauses(): Array<Record<string, unknown>> {
     {
       id: "protect-scopebond-write", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
       param_bounds: { path: { pattern: GUARDRAIL_WRITE_PATTERN } },
-      description: "Never change Scopebond's own settings, keys and policy, its installed program (the Scopebond folder under Programs or Program Files), the coding agents' hook settings, or the hooks git runs (.git/hooks, .git/config, .husky), and never switch Scopebond off (always on; it cannot be relaxed).",
+      description: "Never change Scopebond's own settings, keys and policy, its installed program (the Scopebond folder under Programs or Program Files), the coding agents' hook settings, the hooks git runs (.git/hooks, .git/config, .husky), or the shell startup files (.zshrc, .bashrc, .profile, PowerShell profiles), and never switch Scopebond off (always on; it cannot be relaxed).",
     },
     {
       id: "protect-scopebond-read", type: "action_allowlist", mode: "enforce", action_types: ["file.read"],
@@ -255,6 +274,7 @@ const LEGACY_STARTER_PATTERNS: Record<string, string> = {
   [GUARDRAIL_WRITE_PATTERN_NO_INSTALL]: GUARDRAIL_WRITE_PATTERN,
   [GUARDRAIL_WRITE_WITH_CONFIG]: GUARDRAIL_WRITE_PATTERN,
   [GUARDRAIL_FLOOR_NO_INSTALL]: GUARDRAIL_WRITE_PATTERN,
+  [GUARDRAIL_WRITE_PATTERN_NO_STARTUP]: GUARDRAIL_WRITE_PATTERN,
   [GUARDRAIL_READ_PATTERN_PREV]: GUARDRAIL_READ_PATTERN,
   [SAFE_SHELL_PREV]: SAFE_SHELL,
   "^(?!(?:main|master)$)(?!release/).+": SAFE_REF,

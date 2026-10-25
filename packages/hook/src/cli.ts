@@ -3,7 +3,8 @@
 // before they run, with a signed local receipt. This is the program npm installs and agent
 // settings name (`.../dist/cli.js claude`); the commands themselves are in cli-main.ts.
 
-import { writeSync } from "node:fs";
+import { existsSync, writeSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 // `node:sqlite` (the receipt store) is still flagged experimental on Node 22, and Node
 // prints a warning on stderr the first time it loads — on every `verify`, and into the
@@ -58,7 +59,27 @@ function failClosed(error: unknown): never {
 process.on("uncaughtException", failClosed);
 process.on("unhandledRejection", failClosed);
 
+// A hook call keeps Node's compiled code for the commands, so the next call skips compiling them (about 15 ms of every
+// tool call). Only on the hook calls: setup and uninstall gain nothing from it. The cache sits beside this package, never in
+// a shared temporary folder: whoever can change it could change what runs, and next to the program that is no one who
+// could not already change the program itself (the pinned copy lives under the Scopebond home the floor protects). Where
+// the package's folder is read-only Node keeps no cache and says nothing; NODE_DISABLE_COMPILE_CACHE=1 turns it off.
+// Taken from the built-ins rather than imported: a Node without it must still reach the fail-closed answer above.
+const HOOK_CALLS = ["claude", "codex", "cursor", "copilot"];
+if (HOOK_CALLS.includes(process.argv[2] ?? "")) {
+  try {
+    // The package's own folder (dist/..), and only when it is one: a cli.js copied somewhere alone keeps no cache.
+    if (existsSync(new URL("../package.json", import.meta.url))) {
+      const nodeModule = process.getBuiltinModule?.("node:module") as { enableCompileCache?: (dir: string) => unknown } | undefined;
+      nodeModule?.enableCompileCache?.(fileURLToPath(new URL("../.compile-cache", import.meta.url)));
+    }
+  } catch { /* no cache: the call is only slower */ }
+}
+
 try {
+  // The package build bundles hook-deadline.js and cli-main.js, with everything they load, into one file and points these
+  // two imports at it (scripts/bundle-cli.mjs): one file to read instead of about a hundred. A plain tsc build loads them
+  // as they are.
   // A hook call that has not decided shortly before the coding agent's own time limit denies (hook-deadline.ts).
   const { armHookDeadline } = await import("./hook-deadline.js");
   const disarm = armHookDeadline(process.argv[2]);
