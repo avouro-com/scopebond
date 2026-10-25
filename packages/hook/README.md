@@ -213,6 +213,14 @@ to it automatically when it cannot make a durable copy — slow beats broken. `d
 re-checks that the pinned paths still resolve, so a cleared home or a switched Node
 version shows up as a problem rather than as a hook that silently cannot start.
 
+The pinned command itself got faster after these numbers were taken. `dist/cli.js` now
+loads the commands from one bundled file (`dist/cli-bundle.js`) instead of about a hundred
+modules. Hook calls also keep Node's compile cache in `.compile-cache/` beside the package
+(set `NODE_DISABLE_COMPILE_CACHE=1` to turn it off). On an Apple M2 Max this took a call
+from about 150 ms to about 85 ms. To measure it on your own machine from a checkout of this
+repository, run `pnpm --filter @scopebond/hook bench`. To compare two builds, run
+`node scripts/bench-hook.mjs --cli <old>/dist/cli.js --cli dist/cli.js` in `packages/hook`.
+
 ### What each agent can actually stop
 
 | | Claude Code | Cursor | Codex |
