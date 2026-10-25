@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mapClaudeToolUse, createHookRuntime, scaffold } from "../dist/index.js";
-import { GUARDRAIL_WRITE_PATTERN, INSTALL_FOLDER, upgradeStarterPolicy } from "../dist/runtime.js";
+import { GUARDRAIL_WRITE_PATTERN, INSTALL_FOLDER, SHELL_STARTUP_FLOOR, upgradeStarterPolicy } from "../dist/runtime.js";
 
 function runtimeIn(dir) {
   return createHookRuntime({
@@ -86,7 +86,7 @@ test("a policy compiled before the install folder was protected gets the new pat
   const policy = JSON.parse(readFileSync(file, "utf8"));
   const clause = policy.clauses.find((c) => c.id === "protect-scopebond-write");
   assert.equal(clause.param_bounds.path.pattern, GUARDRAIL_WRITE_PATTERN);
-  clause.param_bounds.path.pattern = GUARDRAIL_WRITE_PATTERN.replace(INSTALL_FOLDER, "");
+  clause.param_bounds.path.pattern = GUARDRAIL_WRITE_PATTERN.replace(INSTALL_FOLDER, "").replace(SHELL_STARTUP_FLOOR, "");
   writeFileSync(file, JSON.stringify(policy));
   const upgraded = upgradeStarterPolicy(JSON.parse(readFileSync(file, "utf8")));
   assert.equal(upgraded.clauses.find((c) => c.id === "protect-scopebond-write").param_bounds.path.pattern, GUARDRAIL_WRITE_PATTERN);
