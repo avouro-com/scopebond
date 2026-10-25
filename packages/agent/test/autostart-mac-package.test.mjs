@@ -16,11 +16,12 @@ const home = join(sandbox, ".scopebond");
 mkdirSync(home, { recursive: true });
 const noReg = () => { throw new Error("the registry is never read on macOS"); };
 /** The package installed, and a launchd whose disabled list says `state` for the label (or nothing). */
-function launchd(state = null) {
+function launchd(state = null, loadedFrom = null) {
   const calls = [];
   const launchctl = (args) => {
     calls.push(args.join(" "));
     if (args[0] === "print-disabled") return { ok: true, out: `\tdisabled services = {\n\t\t"com.apple.Siri.agent" => enabled\n${state ? `\t\t"${LABEL}" => ${state}\n` : ""}\t}\n` };
+    if (args[0] === "print") return loadedFrom ? { ok: true, out: `gui/501/${LABEL} = {\n\tactive count = 1\n\tpath = ${loadedFrom}\n\tstate = running\n}\n` } : { ok: false, out: "" };
     return { ok: true, out: "" };
   };
   return { mac: { plist: MAC_PACKAGE_PLIST, launchctl, uid: 501 }, calls };
@@ -48,7 +49,18 @@ test("autostart on beside the package: no LaunchAgent of the person's own, the p
   assert.equal(said, `the Scopebond package's LaunchAgent (${MAC_PACKAGE_PLIST}) starts the agent with your sign-in`);
   assert.ok(!existsSync(own), "the person's own LaunchAgent with the same label is gone");
   assert.ok(!existsSync(launcherPath(home, "darwin")), "and its launcher");
-  assert.deepEqual(calls, [`enable gui/501/${LABEL}`, `bootstrap gui/501 ${MAC_PACKAGE_PLIST}`]);
+  assert.deepEqual(calls, [`print gui/501/${LABEL}`, `enable gui/501/${LABEL}`, `bootstrap gui/501 ${MAC_PACKAGE_PLIST}`]);
+});
+
+test("autostart on beside the package: the label loaded from another LaunchAgent gives way; the package's own stays", () => {
+  const own = ownLaunchAgent();
+  const fromOwn = launchd(null, own);
+  enableAutostart(home, "", "/usr/local/bin/scopebond-agent", "darwin", null, noReg, fromOwn.mac);
+  assert.deepEqual(fromOwn.calls, [`print gui/501/${LABEL}`, `bootout gui/501/${LABEL}`, `enable gui/501/${LABEL}`, `bootstrap gui/501 ${MAC_PACKAGE_PLIST}`]);
+  // Already running from the package's LaunchAgent (the agent itself turning autostart on): never booted out.
+  const fromPackage = launchd(null, MAC_PACKAGE_PLIST);
+  enableAutostart(home, "", "/usr/local/bin/scopebond-agent", "darwin", null, noReg, fromPackage.mac);
+  assert.ok(!fromPackage.calls.some((c) => c.startsWith("bootout")), fromPackage.calls.join("; "));
 });
 
 test("autostart off beside the package: the label disabled for this person, the agent launchd runs stopped", () => {

@@ -1,10 +1,13 @@
-// From an npm install of the agent to the signed Windows install. When the signed agent starts (or `setup` runs) and finds
-// the npm one, it takes over before anything else, so the two never run side by side:
+// From an npm install of the agent to the signed install (the Windows installer, or the macOS package). When the signed
+// agent starts (or `setup` runs) and finds the npm one, it takes over before anything else, so the two never run side by
+// side:
 //
 //   - the npm agent, if it runs, is asked to stop through its control channel (the `stop` it already answers);
-//   - its sign-in entry (the `ScopebondAgent` Run value) and its launcher go: beside the native tray the tray starts the
-//     agent, and without the tray autostart is pointed at this executable instead;
-//   - its Settings -> Apps entry and that entry's uninstall script go (the installer has its own entry);
+//   - its sign-in entry and its launcher go. On Windows that is the `ScopebondAgent` Run value: beside the native tray the
+//     tray starts the agent, and without the tray autostart is pointed at this executable instead. On macOS it is the
+//     LaunchAgent in ~/Library/LaunchAgents: autostart becomes the package's LaunchAgent (or, without the package, one
+//     that starts this executable);
+//   - on Windows, its Settings -> Apps entry and that entry's uninstall script go (the installer has its own entry);
 //   - every Scopebond hook entry in the coding agents' settings is pointed at this executable (`"<exe>" hook <harness>`).
 //
 // The npm package itself stays where npm put it: the agent never runs npm. It says, once, that
@@ -12,11 +15,11 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Harness } from "@scopebond/hook";
 import { expectedHarnesses } from "./agent.js";
 import { UNINSTALL_KEY, UNINSTALL_SCRIPT } from "./apps-entry.js";
-import { enableAutostart, launcherPath, retireLauncherRunValue, type RegRunner } from "./autostart.js";
+import { autostartPaths, enableAutostart, launcherPath, retireLauncherRunValue, type RegRunner } from "./autostart.js";
 import { hasForeignHookEntries, useNativeHookEntries, type EntryChange } from "./hook-entries.js";
 import { callAgent } from "./ipc.js";
 import { windowsTool, type InstallKind } from "./native-update.js";
@@ -28,6 +31,8 @@ export interface NpmInstall {
   runValue: boolean;
   /** The launcher in the Scopebond folder is the npm one (it finds Node and cli.js). */
   npmLauncher: boolean;
+  /** macOS: the LaunchAgent of this person's own (~/Library/LaunchAgents) that starts the npm launcher. */
+  npmLaunchAgent: boolean;
   /** Its Settings -> Apps entry, and the uninstall script that entry runs. */
   appsEntry: boolean;
   uninstallScript: boolean;
@@ -50,6 +55,8 @@ export interface MigrateDeps {
   enableAutostart: (dir: string) => string;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
+  /** The platform whose npm install is looked for (tests name one; when not named, Windows). */
+  platform?: NodeJS.Platform;
 }
 
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -66,26 +73,51 @@ function defaultMigrateDeps(): MigrateDeps {
     callAgent,
     harnesses: expectedHarnesses,
     exe: process.execPath,
-    npmGlobal: process.env.APPDATA ? join(process.env.APPDATA, "npm", "node_modules") : null,
+    npmGlobal: process.platform === "win32" ? (process.env.APPDATA ? join(process.env.APPDATA, "npm", "node_modules") : null) : null,
     enableAutostart: (dir) => enableAutostart(dir, process.execPath),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     now: () => Date.now(),
+    platform: process.platform,
   };
 }
 
-/** An npm launcher finds Node and the agent's cli.js; the single executable's starts the executable itself. */
+/** An npm launcher finds Node and the agent's cli.js (`set "CLI=…` on Windows, `CLI='…'` on macOS and Linux); the single
+ *  executable's starts the executable itself. */
 export function isNpmLauncher(text: string | null): boolean {
-  return text !== null && /^set "CLI=/m.test(text);
+  return text !== null && /^(?:set "CLI=|CLI=')/m.test(text);
+}
+
+/** The npm package's folder a macOS or Linux npm launcher names (`CLI='<folder>/dist/cli.js'`), or null. */
+export function launcherPackageDir(text: string | null): string | null {
+  const cli = /^CLI='((?:[^']|'\\'')*)'$/m.exec(text ?? "")?.[1]?.replace(/'\\''/g, "'");
+  return cli && cli.endsWith("/dist/cli.js") ? dirname(dirname(cli)) : null;
 }
 
 /** What of an npm install of the agent is on this computer for this user. */
 export function findNpmInstall(dir: string, deps: MigrateDeps = defaultMigrateDeps()): NpmInstall {
-  const packageDir = deps.npmGlobal ? join(deps.npmGlobal, "@scopebond", "agent") : null;
   let hookEntries: Harness[] = [];
   try { hookEntries = deps.harnesses().filter((h) => hasForeignHookEntries(h, deps.exe)); } catch { /* unreadable settings: left alone */ }
+  if ((deps.platform ?? "win32") === "darwin") {
+    // No registry: the npm agent's launcher, the LaunchAgent that starts it, and the package that launcher names.
+    const launcher = deps.readText(launcherPath(dir, "darwin"));
+    const npmLauncher = isNpmLauncher(launcher);
+    const own = autostartPaths().macPlist;
+    const packageDir = launcherPackageDir(launcher);
+    return {
+      runValue: false,
+      npmLauncher,
+      npmLaunchAgent: npmLauncher && (deps.readText(own)?.includes(launcherPath(dir, "darwin")) ?? false),
+      appsEntry: false,
+      uninstallScript: false,
+      packageDir: packageDir && deps.exists(join(packageDir, "package.json")) ? packageDir : null,
+      hookEntries,
+    };
+  }
+  const packageDir = deps.npmGlobal ? join(deps.npmGlobal, "@scopebond", "agent") : null;
   return {
     runValue: deps.reg(["query", RUN_KEY, "/v", "ScopebondAgent"]),
     npmLauncher: isNpmLauncher(deps.readText(launcherPath(dir, "win32"))),
+    npmLaunchAgent: false,
     appsEntry: deps.reg(["query", UNINSTALL_KEY]),
     uninstallScript: deps.exists(join(dir, UNINSTALL_SCRIPT)),
     packageDir: packageDir && deps.exists(join(packageDir, "package.json")) ? packageDir : null,
@@ -95,7 +127,7 @@ export function findNpmInstall(dir: string, deps: MigrateDeps = defaultMigrateDe
 
 /** Whether anything of an npm install is there that the signed install takes over. */
 export function hasNpmInstall(found: NpmInstall): boolean {
-  return found.npmLauncher || found.appsEntry || found.uninstallScript || found.packageDir !== null || found.hookEntries.length > 0;
+  return found.npmLauncher || found.npmLaunchAgent || found.appsEntry || found.uninstallScript || found.packageDir !== null || found.hookEntries.length > 0;
 }
 
 /** Kept once the signed install took over from an npm one: when, and whether the person was told how to remove it. */
@@ -111,8 +143,8 @@ export function readMigration(dir: string): Migration | null {
 }
 
 /** What removes the npm copy, in the words a person types. */
-export function npmRemovalCommand(): string {
-  return `${npmProgram("win32")} uninstall -g @scopebond/agent`;
+export function npmRemovalCommand(platform: NodeJS.Platform = process.platform): string {
+  return `${npmProgram(platform)} uninstall -g @scopebond/agent`;
 }
 
 /** Take over from an npm install, if there is one. Only the signed install does this (`kind` per-user or per-machine);
@@ -133,8 +165,12 @@ export async function migrateFromNpm(dir: string, kind: InstallKind, tray: strin
       steps.push("stopped the Scopebond Agent installed with npm");
     }
     // 2. Its sign-in entry and its launcher. Beside the native tray the tray starts the agent; without it, autostart
-    //    starts this executable instead (a new launcher and Run value).
-    if (tray) {
+    //    starts this executable instead (a new launcher and Run value). On macOS autostart becomes the package's
+    //    LaunchAgent, which takes the npm agent's own LaunchAgent and launcher away (or, without the package, a
+    //    LaunchAgent that starts this executable).
+    if ((deps.platform ?? "win32") === "darwin") {
+      if (found.npmLauncher || found.npmLaunchAgent) steps.push(deps.enableAutostart(dir));
+    } else if (tray) {
       if (found.runValue && retireLauncherRunValue(deps.reg)) steps.push("removed the npm agent's ScopebondAgent sign-in entry");
       if (found.npmLauncher) { rmSync(launcherPath(dir, "win32"), { force: true }); steps.push("removed the npm agent's launcher"); }
     } else if (found.npmLauncher) {
@@ -155,7 +191,7 @@ export async function migrateFromNpm(dir: string, kind: InstallKind, tray: strin
     try { writeFileSync(join(dir, MIGRATED_FILE), `${JSON.stringify(record)}\n`, { mode: 0o600 }); } catch { /* said again next time */ }
     for (const step of steps) log(`moving from the npm install: ${step}`);
     // Once: how to remove the npm package, which the agent leaves to the person.
-    if (!told && found.packageDir) log(`the Scopebond Agent installed with npm is no longer used; remove it with: ${npmRemovalCommand()}`);
+    if (!told && found.packageDir) log(`the Scopebond Agent installed with npm is no longer used; remove it with: ${npmRemovalCommand(deps.platform ?? "win32")}`);
   } catch (error) {
     log(`moving from the npm install did not finish: ${(error as Error).message}`);
   }

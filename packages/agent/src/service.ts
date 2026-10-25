@@ -406,7 +406,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const nativeTray = process.platform === "win32" ? nativeTrayPath() : null;
   // The signed install takes over from an npm install of the agent first: the npm agent is stopped and its sign-in entry
   // retired before this one looks for a running agent or takes the lock, so the npm one never keeps it from starting.
-  if (kind !== "npm" && options.migrate !== false && process.platform === "win32") await migrateFromNpm(options.dir, kind, nativeTray, log);
+  if (kind !== "npm" && options.migrate !== false && (process.platform === "win32" || process.platform === "darwin")) await migrateFromNpm(options.dir, kind, nativeTray, log);
   if (await callAgent(options.dir, "GET", "/status", undefined, 2_000)) throw new Error("a Scopebond Agent is already running for this computer");
   // Two agents started within moments of each other (a slow first start, then a second start) both see
   // nobody answering yet: the lock file decides, so the second exits instead of orphaning the first.
