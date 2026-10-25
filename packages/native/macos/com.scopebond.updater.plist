@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The Scopebond package's updater, as root (the macOS installer package puts it in /Library/LaunchDaemons). launchd
+     starts it when a person's agent leaves a request in the requests folder; it installs the newest signed, notarized
+     release asked for and exits (packages/agent/src/mac-update.ts). It never runs otherwise. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.scopebond.updater</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/scopebond-agent</string>
+    <string>update-daemon</string>
+  </array>
+  <key>WatchPaths</key>
+  <array><string>/Library/Application Support/Scopebond/update-requests</string></array>
+  <key>ThrottleInterval</key><integer>60</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>/Library/Logs/Scopebond-updater.log</string>
+  <key>StandardErrorPath</key><string>/Library/Logs/Scopebond-updater.log</string>
+</dict>
+</plist>

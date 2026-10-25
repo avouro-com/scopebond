@@ -60,14 +60,17 @@ export const readRegistryValue: RegistryReader = (key, name) => {
 };
 
 /** One string value of a preference domain, read from its file (`<domain>.plist`) with macOS's own `plutil` by its full
- *  path: what a configuration profile, `defaults write` or the person put there; null when the file, the value or a
- *  string is not there. `~` is this user's home. The file is read itself, not through the preferences cache, so a value
+ *  path: what a configuration profile, `defaults write` or the person put there ("true" or "false" for a boolean); null
+ *  when the file or the value is not there, or the value is of another type. `~` is this user's home. The file is read itself, not through the preferences cache, so a value
  *  is never stale. */
 export const readMacPreference: RegistryReader = (domain, name) => {
   const file = `${domain.startsWith("~/") ? join(homedir(), domain.slice(2)) : domain}.plist`;
   let out: string;
   try { out = execFileSync("/usr/bin/plutil", ["-extract", name, "xml1", "-o", "-", file], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 }); }
   catch { return null; }
+  // A boolean reads as "true" or "false" (a profile's AutoUpdate); any other type is no setting.
+  const flag = /<plist[^>]*>\s*<(true|false)\/>\s*<\/plist>/.exec(out);
+  if (flag) return flag[1];
   const m = /<plist[^>]*>\s*<string>([^<]*)<\/string>\s*<\/plist>/.exec(out);
   return m ? m[1].replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&") : null;
 };

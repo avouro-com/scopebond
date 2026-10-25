@@ -131,6 +131,9 @@ export interface Refused { ok: false; reason: string }
 /** Download the installer for `version` and check it three ways. Nothing is kept unless every check passes. */
 export async function fetchVerifiedInstaller(version: string, o: {
   dir: string; fetchImpl?: typeof fetch; publicKey?: string | UpdaterKey[] | null; check?: (file: string) => { valid: boolean; subject: string }; base?: string; now?: number;
+  /** The release file to install (default: the Windows installer) and the rule its signer must match (default: Avouro LLC's
+   *  Authenticode subject). The macOS updater names its package and the Developer ID Installer identity. */
+  name?: string; publisher?: RegExp;
 }): Promise<VerifiedInstaller | Refused> {
   const keys = o.publicKey === undefined ? updaterKeys() : o.publicKey === null ? [] : normalizeKeys(o.publicKey);
   if (!keys.length) return { ok: false, reason: "this build has no updater key" };
@@ -148,7 +151,7 @@ export async function fetchVerifiedInstaller(version: string, o: {
   const manifest = verifyManifest(text.toString("utf8"), signature.toString("utf8"), keys, o.now);
   if (!manifest) return { ok: false, reason: "the release manifest is not signed by the updater key" };
   if (manifest.version !== version) return { ok: false, reason: `the manifest is for ${manifest.version}, not ${version}` };
-  const entry = manifest.files.find((f) => f.name === installerName(version));
+  const entry = manifest.files.find((f) => f.name === (o.name ?? installerName(version)));
   if (!entry) return { ok: false, reason: "the manifest names no installer" };
   const bytes = await get(entry.name);
   if (!bytes) return { ok: false, reason: "the installer could not be downloaded" };
@@ -159,7 +162,7 @@ export async function fetchVerifiedInstaller(version: string, o: {
   writeFileSync(path, bytes);
   const signed = (o.check ?? authenticode)(path);
   if (!signed.valid) return { ok: false, reason: "the installer's signature is not valid" };
-  if (!PUBLISHER.test(signed.subject)) return { ok: false, reason: `the installer is signed by ${signed.subject || "someone else"}, not Avouro LLC` };
+  if (!(o.publisher ?? PUBLISHER).test(signed.subject)) return { ok: false, reason: `the installer is signed by ${signed.subject || "someone else"}, not Avouro LLC` };
   return { ok: true, path, version, sha256: entry.sha256, size: entry.size };
 }
 
@@ -323,7 +326,10 @@ export const UPDATE_PENDING_FILE = "update-pending.json";
 export const UPDATE_PENDING_MS = 15 * 60_000;
 
 export function writeUpdatePending(dir: string, version: string, now = Date.now()): void {
-  try { writeFileSync(join(updatesDir(dir), UPDATE_PENDING_FILE), `${JSON.stringify({ version, at: now })}\n`, { mode: 0o600 }); } catch { /* best effort */ }
+  try {
+    mkdirSync(updatesDir(dir), { recursive: true });
+    writeFileSync(join(updatesDir(dir), UPDATE_PENDING_FILE), `${JSON.stringify({ version, at: now })}\n`, { mode: 0o600 });
+  } catch { /* best effort */ }
 }
 
 export function readUpdatePending(dir: string): { version: string; at: number } | null {

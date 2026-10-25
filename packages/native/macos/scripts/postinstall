@@ -1,10 +1,20 @@
 #!/bin/sh
-# After the package's files are in place: start the agent now for each person signed in to this Mac (launchd starts it
-# from /Library/LaunchAgents at every later sign-in). A person for whom launchd has the label disabled stays without it.
-# An install with nobody signed in (a management tool at the login window) starts it at the next sign-in. Nothing here
-# ever fails the install.
+# After the package's files are in place: the updater's folders and its LaunchDaemon, then the agent started now for each
+# person signed in to this Mac (launchd starts it from /Library/LaunchAgents at every later sign-in). A person for whom
+# launchd has the label disabled stays without it. An install with nobody signed in (a management tool at the login
+# window) starts it at the next sign-in. Nothing here ever fails the install.
 LABEL=com.scopebond.agent
 PLIST="/Library/LaunchAgents/$LABEL.plist"
+UPDATER=com.scopebond.updater
+SUPPORT="/Library/Application Support/Scopebond"
+
+# Requests from people's agents: anyone may leave one, nobody but root reads or removes another's (sticky, no read).
+/bin/mkdir -p "$SUPPORT/update-requests" "$SUPPORT/updater"
+/usr/sbin/chown root:wheel "$SUPPORT/update-requests" "$SUPPORT/updater"
+/bin/chmod 1733 "$SUPPORT/update-requests"
+/bin/chmod 0700 "$SUPPORT/updater"
+# The updater: loaded once. An update it installs itself runs this script too, and leaves the running updater alone.
+/bin/launchctl print "system/$UPDATER" >/dev/null 2>&1 || /bin/launchctl bootstrap system "/Library/LaunchDaemons/$UPDATER.plist" 2>/dev/null || true
 
 for uid in $(/bin/ps -axo uid=,comm= | /usr/bin/awk '$1 != 0 && $2 ~ /\/loginwindow$/ { print $1 }' | /usr/bin/sort -u); do
   /bin/launchctl bootstrap "gui/$uid" "$PLIST" 2>/dev/null || true

@@ -10,6 +10,8 @@
 // The package installs, for every user of the Mac:
 //   /usr/local/bin/scopebond-agent                          the agent and the hook (on PATH in every new terminal)
 //   /Library/LaunchAgents/com.scopebond.agent.plist          starts `scopebond-agent run` as each person who signs in
+//   /Library/LaunchDaemons/com.scopebond.updater.plist       the updater, as root: installs the next signed package
+//                                                            when a person's agent asks (`scopebond-agent update-daemon`)
 //   /Library/Application Support/Scopebond/uninstall.sh      removes all of it (`sudo … uninstall.sh [--purge]`)
 // Its scripts stop the running agents before an upgrade (preinstall) and start the new one for everyone signed in
 // (postinstall). Signing in, the hook entries and the workspace come from the agent, as after the Windows installer.
@@ -29,6 +31,7 @@ export const PACKAGE_ID = "com.scopebond.agent";
 export const PAYLOAD = [
   { path: "usr/local/bin/scopebond-agent", from: null, mode: 0o755 },
   { path: "Library/LaunchAgents/com.scopebond.agent.plist", from: join(macos, "com.scopebond.agent.plist"), mode: 0o644 },
+  { path: "Library/LaunchDaemons/com.scopebond.updater.plist", from: join(macos, "com.scopebond.updater.plist"), mode: 0o644 },
   { path: "Library/Application Support/Scopebond/uninstall.sh", from: join(macos, "uninstall.sh"), mode: 0o755 },
 ];
 /** The oldest macOS the package installs on: Node 22's own minimum. */

@@ -49,7 +49,8 @@ hand. The build fails when the commit's `packages/agent` is not the version it w
 3. **installer** (no secrets and no OIDC token): checks that both programs are signed by Avouro LLC, then builds the
    installer around them with WiX (`dotnet tool restore`, its extension, `wix build`, then `wix msi validate`: Windows
    Installer's ICE rules, warnings included). The build tools never run in a job that can ask for a signing token.
-4. **sign-installer**, in the `signing` environment again (a second approval): signs the installer, then
+4. **sign-installer**, in the `signing` environment again (a second approval), after sign-macos when Apple signing is on
+   (its signed packages and executables join the same files): signs the installer, then
    `verify-signed.ps1` (`signtool verify /pa`, a valid signature, a timestamp, and the publisher: the subject's `O=` is
    exactly `Avouro LLC`, the rule the updater uses), `SHA256SUMS`, the signed release manifest (the run fails without
    `UPDATER_SIGNING_KEY`), the winget manifests and a build provenance attestation (`gh attestation verify <file> --repo
@@ -128,6 +129,10 @@ macOS 11 or later. The package:
 
 - installs for every user of the Mac (an administrator's password): `/usr/local/bin/scopebond-agent`, on PATH in every
   new terminal; the folders on the way keep the owner and mode they already have;
+- adds the updater, the LaunchDaemon `/Library/LaunchDaemons/com.scopebond.updater.plist` (root): launchd starts
+  `scopebond-agent update-daemon` when a person's agent leaves a request in `/Library/Application Support/Scopebond/update-requests`
+  (writable by everyone, readable by root alone). It installs the newest signed, notarized release asked for, as the
+  agent README describes, and writes `update-result.json` beside it;
 - adds the LaunchAgent `/Library/LaunchAgents/com.scopebond.agent.plist`, which runs `scopebond-agent run` as each person
   who signs in, with the agent's log in their Scopebond folder; a crash restarts it after 30 seconds, a clean stop does
   not. Its label is the agent's own autostart label, so launchd never runs a second agent beside it;

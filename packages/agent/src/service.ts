@@ -43,6 +43,7 @@ import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary }
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
 import { connectWithInstallKey, FIRST_SIGNIN_FILE, installedKey, installedWorkspace, startFirstSignIn, type FirstSignIn, type RegistryReader } from "./signin.js";
 import { migrateFromNpm, readMigration, npmRemovalCommand } from "./migrate.js";
+import { hasMacUpdater, macAutoUpdate, MAC_UPDATER_PATHS, requestMacUpdate, takeMacUpdateResult, type MacUpdaterPaths } from "./mac-update.js";
 import { enableAutostart } from "./autostart.js";
 import {
   agentVersion, clearFailedUpdate, failedUpdate, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand, recentlyFailedUpdate, recordFailedUpdate, startCheck,
@@ -144,6 +145,9 @@ export interface ServiceOptions {
   /** Whether an install for this user updates itself with the signed installer (default: on Windows only; on macOS a new
    *  package updates it, so it never takes the Windows installer's path). */
   nativeUpdates?: boolean;
+  /** The macOS package's updater (mac-update.ts), for an install for every user that has it (default: found out; null:
+   *  none; tests name their own folders). */
+  macUpdater?: MacUpdaterPaths | null;
   /** A signed install that was never connected starts its first sign-in by itself, once (default: on for a signed
    *  install, off from npm). */
   autoSignIn?: boolean;
@@ -403,6 +407,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const log = options.log ?? ((line: string) => console.log(`${new Date().toISOString()} ${line}`));
   const kind = options.installKind ?? installKind();
   const nativeUpdates = options.nativeUpdates ?? process.platform === "win32";
+  const macUpdater = options.macUpdater !== undefined ? options.macUpdater : kind === "per-machine" && hasMacUpdater() ? MAC_UPDATER_PATHS : null;
   const nativeTray = process.platform === "win32" ? nativeTrayPath() : null;
   // The signed install takes over from an npm install of the agent first: the npm agent is stopped and its sign-in entry
   // retired before this one looks for a running agent or takes the lock, so the npm one never keeps it from starting.
@@ -416,7 +421,9 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const unprotected = ensurePrivateDir(options.dir);
   if (unprotected) log(`the folder ${options.dir} could not be made readable by this user alone: ${unprotected}`);
   rmSync(join(options.dir, STOPPED_FILE), { force: true });
-  // What the install helper of a signed update recorded before this start (installAfterExit).
+  // What the install helper of a signed update recorded before this start (installAfterExit), or the macOS package's
+  // updater for the version this agent asked for.
+  if (macUpdater) takeMacUpdateResult(options.dir, macUpdater);
   noteUpdateOutcome(options.dir, log);
   // The update this start finishes, if any: the tray says "Updated to …" once.
   const updatedHere = noteRunningVersion(options.dir, agentVersion());
@@ -611,8 +618,22 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       for (const change of result.hookEntries) log(`${change.reason}: ${change.file}`);
       // The npm install follows the workspace's `agent`; the signed install its `native_agent` only (updateTarget).
       const newer = updateTarget(target, kind, current);
+      // The macOS updater's result for an update asked for earlier (a package that did not install counts as failed).
+      if (macUpdater && takeMacUpdateResult(options.dir, macUpdater)) noteUpdateOutcome(options.dir, log);
       const pending = readUpdatePending(options.dir);
-      if (newer && kind === "per-machine") {
+      if (newer && kind === "per-machine" && macUpdater) {
+        // The macOS package, for every user: its root updater installs the next signed package when asked.
+        if (!macAutoUpdate()) log(`the workspace recommends the Scopebond Agent ${newer}; updates are turned off for this Mac (AutoUpdate), so it is updated by your organization`);
+        else if (recentlyFailedUpdate(options.dir, newer)) log(`the Scopebond Agent ${newer} did not install or start here earlier; staying on ${current} for now`);
+        else if (pending && pending.version === newer && Date.now() - pending.at < UPDATE_PENDING_MS) log(`the update to ${newer} is under way`);
+        // Asked before and never reported back: recorded as a failed update, and asked again on the retry schedule.
+        else if (pending && pending.version === newer) noteUpdateOutcome(options.dir, log);
+        else {
+          const refused = requestMacUpdate(newer, process.getuid?.() ?? -1, macUpdater);
+          if (refused) log(`the update to ${newer} could not start: ${refused}`);
+          else { writeUpdatePending(options.dir, newer); log(`asked the Scopebond updater to install ${current} -> ${newer} (signed package)`); }
+        }
+      } else if (newer && kind === "per-machine") {
         // Installed for every user: the organisation that deployed it updates it.
         log(`the workspace recommends the Scopebond Agent ${newer}; this install is updated by your organization`);
       } else if (newer && kind === "per-user" && !nativeUpdates) {
@@ -704,7 +725,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const retryUpdateWhenDue = () => {
     if (updateRetryTimer) { clearTimeout(updateRetryTimer); updateRetryTimer = null; }
     const failed = failedUpdate(options.dir);
-    if (stopped || options.maintenance === false || !failed || kind === "per-machine" || (kind === "per-user" && !nativeUpdates)) return;
+    if (stopped || options.maintenance === false || !failed || (kind === "per-machine" && !macUpdater) || (kind === "per-user" && !nativeUpdates)) return;
     const wait = failed.retry_at - Date.now() + 1_000;
     updateRetryTimer = setTimeout(() => { updateRetryTimer = null; if (!stopped) void maintain(); }, Math.max(wait, 1_000));
     updateRetryTimer.unref?.();

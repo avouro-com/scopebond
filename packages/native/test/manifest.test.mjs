@@ -80,3 +80,12 @@ test("the manifest names the id of the key that signed it, the agent computes th
   writeFileSync(join(keys, "updater-keys.json"), JSON.stringify([{ kid: "0000000000000000", key: pub(a), not_after: null }]));
   assert.throws(() => updaterKeysDefine(keys), /not the id of its key/);
 });
+
+test("the manifest names the macOS packages and executables too, so the macOS updater can check its package", () => {
+  const { folder, sign, publicKey } = release();
+  writeFileSync(join(folder, "scopebond-agent-1.2.3-arm64.pkg"), "pkg");
+  writeFileSync(join(folder, "scopebond-agent-macos-arm64.zip"), "zip");
+  writeFileSync(join(folder, "SHA256SUMS"), "sums");
+  const manifest = verifyManifest(manifestFor("1.2.3", folder, COMMIT), sign(manifestFor("1.2.3", folder, COMMIT)), publicKey);
+  assert.deepEqual(manifest.files.map((f) => f.name), ["scopebond-agent-1.2.3-arm64.pkg", "scopebond-agent-1.2.3-x64.exe", "scopebond-agent-1.2.3-x64.msi", "scopebond-agent-macos-arm64.zip"]);
+});

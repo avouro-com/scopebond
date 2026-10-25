@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FIRST_SIGNIN_FILE, LABEL, MAC_PACKAGE_EXE, MAC_PACKAGE_UNINSTALL } from "@scopebond/agent";
+import { FIRST_SIGNIN_FILE, LABEL, MAC_PACKAGE_EXE, MAC_PACKAGE_UNINSTALL, MAC_UPDATER_COMMAND, MAC_UPDATER_LABEL, MAC_UPDATER_PATHS, MAC_UPDATER_PLIST } from "@scopebond/agent";
 import { buildSea } from "../build-sea.mjs";
 import { buildPkg, distributionXml, MIN_MACOS, PACKAGE_ID, PAYLOAD } from "../build-pkg.mjs";
 import { installerVersion } from "../version.mjs";
@@ -27,7 +27,16 @@ const PLIST_PATH = `/Library/LaunchAgents/${LABEL}.plist`;
 const UNINSTALL_PATH = "/Library/Application Support/Scopebond/uninstall.sh";
 
 test("the package's files agree with the agent: its path, its autostart label and its removal command", () => {
-  assert.deepEqual(PAYLOAD.map((f) => `/${f.path}`), [MAC_PACKAGE_EXE, PLIST_PATH, UNINSTALL_PATH]);
+  assert.deepEqual(PAYLOAD.map((f) => `/${f.path}`), [MAC_PACKAGE_EXE, PLIST_PATH, MAC_UPDATER_PLIST, UNINSTALL_PATH]);
+  // The updater the package runs as root: the agent's own command, started when a request lands in the agent's folder.
+  const daemon = read("com.scopebond.updater.plist");
+  assert.ok(daemon.includes(`<key>Label</key><string>${MAC_UPDATER_LABEL}</string>`));
+  assert.ok(daemon.includes(`<string>${MAC_PACKAGE_EXE}</string>\n    <string>${MAC_UPDATER_COMMAND}</string>`));
+  assert.ok(daemon.includes(`<array><string>${MAC_UPDATER_PATHS.requests}</string></array>`), "WatchPaths is the requests folder");
+  const postinstall = read("scripts", "postinstall");
+  assert.ok(postinstall.includes('/bin/chmod 1733 "$SUPPORT/update-requests"') && postinstall.includes('/bin/chmod 0700 "$SUPPORT/updater"'));
+  assert.equal(`/Library/Application Support/Scopebond/update-requests`, MAC_UPDATER_PATHS.requests);
+  assert.match(read("uninstall.sh"), /launchctl bootout "system\/\$UPDATER"/);
   assert.equal(MAC_PACKAGE_UNINSTALL, `sudo "${UNINSTALL_PATH}"`);
   const plist = read("com.scopebond.agent.plist");
   assert.match(plist, new RegExp(`<key>Label</key><string>${literal(LABEL)}</string>`));
@@ -117,6 +126,7 @@ test("the package installs the executable, the LaunchAgent and the uninstall scr
   assert.deepEqual(files.map(([path, mode, user, group]) => [path, mode, user, group]).sort(), [
     ["./Library/Application Support/Scopebond/uninstall.sh", "-rwxr-xr-x", "root", "wheel"],
     ["./Library/LaunchAgents/com.scopebond.agent.plist", "-rw-r--r--", "root", "wheel"],
+    ["./Library/LaunchDaemons/com.scopebond.updater.plist", "-rw-r--r--", "root", "wheel"],
     ["./usr/local/bin/scopebond-agent", "-rwxr-xr-x", "root", "wheel"],
   ]);
 
@@ -145,6 +155,17 @@ test("the package installs the executable, the LaunchAgent and the uninstall scr
     ProcessType: "Background",
   });
   assert.equal(readFileSync(join(payload, "Library", "Application Support", "Scopebond", "uninstall.sh"), "utf8"), read("uninstall.sh"));
+  const updater = join(payload, "Library", "LaunchDaemons", "com.scopebond.updater.plist");
+  assert.equal(spawnSync("plutil", ["-lint", updater], { encoding: "utf8" }).status, 0);
+  assert.deepEqual(JSON.parse(spawnSync("plutil", ["-convert", "json", "-o", "-", updater], { encoding: "utf8" }).stdout), {
+    Label: MAC_UPDATER_LABEL,
+    ProgramArguments: [MAC_PACKAGE_EXE, MAC_UPDATER_COMMAND],
+    WatchPaths: [MAC_UPDATER_PATHS.requests],
+    ThrottleInterval: 60,
+    ProcessType: "Background",
+    StandardOutPath: "/Library/Logs/Scopebond-updater.log",
+    StandardErrorPath: "/Library/Logs/Scopebond-updater.log",
+  });
 
   // The scripts Installer runs, as they are in the repository and executable.
   const scripts = join(component, "Scripts");
@@ -193,13 +214,24 @@ test("the package installs for every user and starts the agent, and its uninstal
   if (install.status !== 0) removed();
   assert.equal(install.status, 0, install.stdout + install.stderr);
   try {
-    for (const file of [MAC_PACKAGE_EXE, PLIST_PATH, UNINSTALL_PATH]) {
+    for (const file of [MAC_PACKAGE_EXE, PLIST_PATH, MAC_UPDATER_PLIST, UNINSTALL_PATH]) {
       assert.ok(existsSync(file), `installed: ${file}`);
       assert.equal(statSync(file).uid, 0, `${file} belongs to root`);
     }
     const version = spawnSync(MAC_PACKAGE_EXE, ["--version"], { encoding: "utf8" });
     assert.equal(version.status, 0, version.stderr);
     assert.equal(spawnSync("pkgutil", ["--pkg-info", PACKAGE_ID], { encoding: "utf8" }).status, 0, "the receipt");
+    // The updater: loaded as root, its requests folder writable by everyone and readable by root alone, its own folder
+    // root's. A request this person leaves starts it; a release that does not exist is refused, and the result says so.
+    assert.equal(sudo(["launchctl", "print", `system/${MAC_UPDATER_LABEL}`]).status, 0, "the updater is loaded");
+    assert.equal(statSync(MAC_UPDATER_PATHS.requests).mode & 0o7777, 0o1733);
+    assert.equal(statSync(MAC_UPDATER_PATHS.work).mode & 0o7777, 0o700);
+    assert.equal(spawnSync("/bin/ls", [MAC_UPDATER_PATHS.requests]).status, 1, "nobody else can list the requests");
+    writeFileSync(join(MAC_UPDATER_PATHS.requests, `${uid}-0123456789abcdef.json`), JSON.stringify({ version: "99.0.0" }));
+    const result = () => { try { return JSON.parse(readFileSync(MAC_UPDATER_PATHS.result, "utf8")); } catch { return null; } };
+    assert.ok(await waitFor(() => result()?.version === "99.0.0", 90_000), `the updater ran: ${readFileSync("/Library/Logs/Scopebond-updater.log", "utf8").slice(-2000)}`);
+    assert.equal(result().installed, false);
+    assert.match(result().reason, /no signed manifest/, "a release that does not exist installs nothing");
     if (signedIn(uid)) {
       // postinstall started it for the person signed in; launchd runs it as that person.
       assert.ok(await waitFor(() => /state = running/.test(loaded(uid).stdout), 30_000), loaded(uid).stdout + loaded(uid).stderr);
@@ -226,7 +258,8 @@ test("the package installs for every user and starts the agent, and its uninstal
   assert.ok(uninstall.status === 0 || uninstall.status === 75, `exit ${uninstall.status}: ${uninstall.stdout}${uninstall.stderr}`);
   assert.match(uninstall.stdout, /Removed the Scopebond Agent/);
   assert.match(uninstall.stdout, /Your Scopebond folder .* stays|No Scopebond folder is left/, "the last sentence names the folder");
-  for (const file of [MAC_PACKAGE_EXE, PLIST_PATH, dirname(UNINSTALL_PATH)]) assert.ok(!existsSync(file), `removed: ${file}`);
+  for (const file of [MAC_PACKAGE_EXE, PLIST_PATH, MAC_UPDATER_PLIST, dirname(UNINSTALL_PATH)]) assert.ok(!existsSync(file), `removed: ${file}`);
+  assert.notEqual(sudo(["launchctl", "print", `system/${MAC_UPDATER_LABEL}`]).status, 0, "the updater is no longer loaded");
   assert.notEqual(spawnSync("pkgutil", ["--pkg-info", PACKAGE_ID], { encoding: "utf8" }).status, 0, "the receipt is forgotten");
   assert.notEqual(loaded(uid).status, 0, "launchd no longer has the agent");
   assert.ok(await waitFor(() => spawnSync("pgrep", ["-f", MAC_PACKAGE_EXE]).status !== 0, 15_000), "no agent left running");
