@@ -288,10 +288,22 @@ export function isTrustedProject(dir: string): boolean {
  *  project's rule files, never this state, so a repository could otherwise bring an allowance for an action its trusted
  *  policy blocks. For such a project it is the user-level home. */
 export function decisionStateDir(dir: string): string {
-  if (process.env.SCOPEBOND_HOOK_DIR) return dir;
+  const override = honouredOverride();
+  if (override && samePath(override, dir)) return dir;
   const home = userHome();
   if (samePath(dir, home) || !existsSync(join(home, "policy.json"))) return dir;
   return home;
+}
+
+/** Whether a hook event honours SCOPEBOND_HOOK_DIR: always while no user-level install exists (tests, a project-only setup);
+ *  once one does, only when it names that install or a folder whose policy the person trusted. A variable the coding agent
+ *  planted (a shell startup file, an enclosing command) cannot point the hook at rules of its own. */
+function honouredOverride(): string | null {
+  const override = process.env.SCOPEBOND_HOOK_DIR;
+  if (!override) return null;
+  const home = userHome();
+  if (!existsSync(join(home, "policy.json")) || samePath(override, home) || isTrustedProject(override)) return override;
+  return null;
 }
 
 /** Resolve the config dir for a hook event, most specific first:
@@ -299,9 +311,11 @@ export function decisionStateDir(dir: string): string {
  *  A project dir counts only when it has been scaffolded (a policy.json), so a bare
  *  working directory never shadows the user-level install — and, once a user-level
  *  install exists, only when its policy is trusted (`isTrustedProject`). Otherwise the
- *  user's own policy governs: a repository cannot bring a weaker one with it. */
+ *  user's own policy governs: a repository cannot bring a weaker one with it. The
+ *  override is held to the same trust (`honouredOverride`). */
 export function resolveConfigDir(payloadCwd: string | undefined): string {
-  if (process.env.SCOPEBOND_HOOK_DIR) return process.env.SCOPEBOND_HOOK_DIR;
+  const override = honouredOverride();
+  if (override) return override;
   const candidates: string[] = [];
   if (payloadCwd) candidates.push(join(payloadCwd, ".scopebond"));
   if (process.env.CLAUDE_PROJECT_DIR) candidates.push(join(process.env.CLAUDE_PROJECT_DIR, ".scopebond"));
