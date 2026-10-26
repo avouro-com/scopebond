@@ -206,7 +206,8 @@ export { runStoreUpkeep, upkeepIfDue, localRetentionDays, retentionDaysFrom, DEF
 export type { UpkeepOptions } from "./store-upkeep.js";
 export { evidenceDetail, evidenceDetailFrom, summaryOptions } from "./evidence-detail.js";
 export type { EvidenceDetail } from "./evidence-detail.js";
-export { isSingleExecutable, hookCliPath, hookSelfCommand, nodeSqlite } from "./self.js";
+export { isSingleExecutable, isSignedBuild, hookCliPath, hookSelfCommand, nodeSqlite } from "./self.js";
+export { accountHome, codeLoadingVariables, commandLineOnly, commandLineSettings, ignoredSettings, isCommandLineSetting, movedHome, setting, settingsEnv, withoutSettingArgs, AS_SIGNED_BUILD_ENV, CODE_LOADING_VARS, COMMAND_LINE_SETTINGS, SETTING_FLAG } from "./env-trust.js";
 export { requestOverSocket } from "./local-socket.js";
 export { reportHookActivity, HOOK_ACTIVITY_ROUTE, HOOK_ACTIVITY_EVENTS, type HookActivityEvent, type HookActivityReport } from "./hook-activity.js";
 export { onboardingSteps } from "./onboarding.js";

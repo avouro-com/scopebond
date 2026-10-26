@@ -92,11 +92,17 @@ test("Windows: a bare `git push` from a project holding git.exe reads the branch
       vocabulary_version: "1.0", policy_id: "branch", version: 1,
       clauses: [{ id: "branch", type: "action_allowlist", mode: "enforce", action_types: ["git.push"], param_bounds: { ref: { pattern: "^(?!(?:main|master)$).+" } } }],
     }));
-    const event = { tool_name: "Bash", tool_input: { command: "git push" }, cwd: h.repo };
-    const r = spawnSync(process.execPath, [cli, "claude"], { cwd: h.repo, env: { ...h.env, SCOPEBOND_HOOK_DIR: dir }, input: JSON.stringify(event), encoding: "utf8" });
+    // A hook call refuses to decide while NODE_OPTIONS is set (the marker preload here), so the branch read is shown with
+    // `test`, which reads it the same way (currentBranch) and decides as a hook call would.
+    const r = spawnSync(process.execPath, [cli, "test", "git push"], { cwd: h.repo, env: { ...h.env, SCOPEBOND_HOOK_DIR: dir }, encoding: "utf8" });
     assert.deepEqual(h.ran(), [], "the planted git.exe did not run");
     // The branch came from the real git, so the push of feature/work is in policy (an unreadable branch fails closed).
     assert.equal(r.status, 0, `the push of feature/work is allowed: ${r.stdout}${r.stderr}`);
+    const event = { tool_name: "Bash", tool_input: { command: "git push" }, cwd: h.repo };
+    const call = spawnSync(process.execPath, [cli, "claude"], { cwd: h.repo, env: { ...h.env, SCOPEBOND_HOOK_DIR: dir }, input: JSON.stringify(event), encoding: "utf8" });
+    assert.equal(call.status, 2, "the hook call itself refuses while NODE_OPTIONS is set");
+    assert.match(call.stdout, /NODE_OPTIONS/);
+    assert.deepEqual(h.ran(), [], "and starts nothing");
     rmSync(dir, { recursive: true, force: true });
   } finally { h.cleanup(); }
 });

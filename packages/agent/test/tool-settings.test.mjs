@@ -17,13 +17,13 @@ const NOW = new Date("2026-10-20T00:00:00Z");
 const pair = generateKeyPairSync("ed25519");
 const stranger = generateKeyPairSync("ed25519");
 const KEYS = [{ key_id: "ws-1", public_key: pair.publicKey.export({ type: "spki", format: "pem" }), not_before: "2026-10-01T00:00:00Z", not_after: "2027-10-01T00:00:00Z" }];
-const ENV_KEYS = ["HOME", "USERPROFILE", "SCOPEBOND_POLICY_KEYS_JSON", "CLAUDE_CONFIG_DIR"];
+const ENV_KEYS = ["HOME", "USERPROFILE", "SCOPEBOND_HOME", "SCOPEBOND_POLICY_KEYS_JSON", "CLAUDE_CONFIG_DIR"];
 
 /** Run `fn` with a fresh fixture home as this process's home, and a Scopebond folder connected to a workspace. */
 async function inHome(fn) {
   const home = mkdtempSync(join(tmpdir(), "sb-toolsettings-home-"));
   const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
-  process.env.HOME = home; process.env.USERPROFILE = home;
+  process.env.HOME = home; process.env.USERPROFILE = home; process.env.SCOPEBOND_HOME = join(home, ".scopebond");
   delete process.env.SCOPEBOND_POLICY_KEYS_JSON;
   delete process.env.CLAUDE_CONFIG_DIR;
   try {

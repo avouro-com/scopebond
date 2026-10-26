@@ -45,6 +45,7 @@ import { runPackVectors, setActivePacks } from "./packs.js";
 import { activateTaxonomyExtension } from "./pack-taxonomy.js";
 import { useNextKey } from "./policy-next-key.js";
 import { loadLocalPacks, type LocalPacks } from "./pack-local.js";
+import { settingsEnv } from "./env-trust.js";
 
 export const PACKS_DIR = "packs";
 export const PACK_INDEX_FILE = "index.json";
@@ -61,11 +62,12 @@ export type PackRefusal = "invalid" | "unknown_key" | "key_not_valid" | "bad_sig
   | "engine_too_old" | "unknown_action_type" | "killed";
 
 /** The environment variable that lowers the pack engine level this hook reads at (tests, and trying what an older engine
- *  sees): an integer from 1 to `PACK_ENGINE_LEVEL`. It can never raise it. */
+ *  sees): an integer from 1 to `PACK_ENGINE_LEVEL`. It can never raise it. A signed build reads it only from the hook's command
+ *  line (env-trust.ts). */
 export const PACK_ENGINE_ENV = "SCOPEBOND_PACK_ENGINE_LEVEL";
 
 /** The pack engine level this hook reads packs at: `PACK_ENGINE_LEVEL`, or lower when `SCOPEBOND_PACK_ENGINE_LEVEL` says so. */
-export function packEngineLevel(env: NodeJS.ProcessEnv = process.env): number {
+export function packEngineLevel(env: NodeJS.ProcessEnv = settingsEnv()): number {
   const raw = env[PACK_ENGINE_ENV];
   const n = raw !== undefined && /^\d{1,4}$/.test(raw.trim()) ? Number(raw.trim()) : NaN;
   return Number.isInteger(n) && n >= 1 && n <= PACK_ENGINE_LEVEL ? n : PACK_ENGINE_LEVEL;

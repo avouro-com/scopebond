@@ -23,9 +23,11 @@
 //   }
 //
 // `SCOPEBOND_POLICY_KEYS_JSON` adds keys in the same shape (a JSON array) for tests and for trying a key before a release
-// pins it. Whoever can set this process's environment can already change what it runs, so it widens nothing.
+// pins it. An npm install reads it from the environment; a signed build only from the hook's command line (env-trust.ts),
+// so a variable set for later sessions (a shell startup file, `setx`) cannot add a key a signed install trusts.
 
 import { createPublicKey, type KeyObject } from "node:crypto";
+import { settingsEnv } from "./env-trust.js";
 
 export interface PolicyKey {
   /** The id a signed document names in `key_id`. */
@@ -118,18 +120,18 @@ export const baseKeyProblem = (value: unknown): string | null => keyProblem(valu
 
 /** The keys this release trusts on its own: the pinned ones, then the valid entries of `SCOPEBOND_POLICY_KEYS_JSON`. Only these
  *  may sign a next-key document. */
-export function basePolicyKeys(env: NodeJS.ProcessEnv = process.env): PolicyKey[] {
+export function basePolicyKeys(env: NodeJS.ProcessEnv = settingsEnv()): PolicyKey[] {
   return readKeys(env).keys;
 }
 
 /** The keys this computer trusts: the pinned ones, then the valid entries of `SCOPEBOND_POLICY_KEYS_JSON`, then the next key a
  *  signed next-key document pinned here. An entry that cannot be a key (see `policyKeyProblems`) is left out. */
-export function policyKeys(env: NodeJS.ProcessEnv = process.env): PolicyKey[] {
+export function policyKeys(env: NodeJS.ProcessEnv = settingsEnv()): PolicyKey[] {
   const keys = readKeys(env).keys;
   return [...keys, ...pinnedNext.filter((k) => !keys.some((t) => t.key_id === k.key_id))];
 }
 
 /** What is wrong with the configured keys, for `doctor`: the entries left out, and why. */
-export function policyKeyProblems(env: NodeJS.ProcessEnv = process.env): string[] {
+export function policyKeyProblems(env: NodeJS.ProcessEnv = settingsEnv()): string[] {
   return readKeys(env).problems;
 }

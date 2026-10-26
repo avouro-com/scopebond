@@ -100,7 +100,7 @@ test("a block note says the workspace keeps it quiet, and only for a rule's bloc
 test("a blocked call whose digest the workspace lists is noted quiet and listed so; others are not", () => {
   const dir = mkdtempSync(join(tmpdir(), "sb-quiet-cli-"));
   const config = join(dir, "sb-config");
-  const env = { ...process.env, SCOPEBOND_HOOK_DIR: config, HOME: dir, USERPROFILE: dir };
+  const env = { ...process.env, SCOPEBOND_HOOK_DIR: config, HOME: dir, USERPROFILE: dir, SCOPEBOND_HOME: join(dir, ".scopebond") };
   const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
   try {
     execFileSync(process.execPath, [cli, "init", "--no-install", "--yes"], { cwd: dir, encoding: "utf8", env });

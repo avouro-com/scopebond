@@ -154,7 +154,7 @@ test("connect persists a scoped credential and auto-exports receipts to Cloud", 
     for (const command of ["doctor", "flush"]) {
       const result = await promisify(execFile)(process.execPath, [cli, command], {
         // Its own home folder: a Scopebond hook in the real user settings would be a duplicate of this project's.
-        cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir, HOME: join(dir, "home"), USERPROFILE: join(dir, "home") }, timeout: 15_000,
+        cwd: project, env: { ...process.env, SCOPEBOND_HOOK_DIR: dir, HOME: join(dir, "home"), USERPROFILE: join(dir, "home"), SCOPEBOND_HOME: join(dir, "home", ".scopebond") }, timeout: 15_000,
       });
       assert.doesNotMatch(result.stderr, /Assertion failed/);
       assert.match(result.stdout, command === "doctor" ? /All good/ : /0 receipt\(s\) still pending/);
@@ -208,8 +208,9 @@ test("connecting this computer puts the hook in the user-level agent settings, n
     const bundleFile = join(scratch, "scopebond-enrollment.json");
     writeFileSync(bundleFile, JSON.stringify(bundle));
     const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
-    const env = { ...process.env, HOME: home, USERPROFILE: home };
-    delete env.SCOPEBOND_HOME; delete env.SCOPEBOND_HOOK_DIR; delete env.CLAUDE_PROJECT_DIR;
+    // The user-level home in the test's own profile (Scopebond's home follows the OS account, not HOME).
+    const env = { ...process.env, HOME: home, USERPROFILE: home, SCOPEBOND_HOME: sbHome };
+    delete env.SCOPEBOND_HOOK_DIR; delete env.CLAUDE_PROJECT_DIR;
     const result = await promisify(execFile)(process.execPath, [cli, "connect", cloud.url, bundleFile, "--claude"], { cwd: scratch, env, timeout: 30_000 });
     assert.match(result.stdout, /Connected to/);
     const userSettings = join(home, ".claude", "settings.json");

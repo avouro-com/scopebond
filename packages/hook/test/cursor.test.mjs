@@ -108,7 +108,7 @@ function isolatedCursorEvent(dir, payload) {
   const home = mkdtempSync(join(tmpdir(), "sb-cursor-home-"));
   const out = execFileSync(process.execPath, [cli, "cursor"], {
     encoding: "utf8", input: JSON.stringify(payload),
-    env: { ...process.env, SCOPEBOND_HOOK_DIR: dir, HOME: home, USERPROFILE: home, APPDATA: join(home, "AppData", "Roaming"), LOCALAPPDATA: join(home, "AppData", "Local") },
+    env: { ...process.env, SCOPEBOND_HOOK_DIR: dir, HOME: home, USERPROFILE: home, SCOPEBOND_HOME: join(home, ".scopebond"), APPDATA: join(home, "AppData", "Roaming"), LOCALAPPDATA: join(home, "AppData", "Local") },
   });
   return JSON.parse(out);
 }

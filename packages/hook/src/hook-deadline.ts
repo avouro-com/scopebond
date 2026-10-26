@@ -83,6 +83,11 @@ function denyHookCall(command: string | undefined, reason: string): never {
   process.exit(command === "claude" || command === "copilot" ? 2 : 1);
 }
 
+/** Each agent's "deny" for a hook call that refuses to decide at all (`reason` says why and what to do), then exit. */
+export function refuseHookCall(command: string | undefined, reason: string): never {
+  denyHookCall(command, reason);
+}
+
 /** The deny for a failure no command answered itself (a module that cannot load, an uncaught error). */
 export function failClosed(error: unknown, command: string | undefined = process.argv[2]): never {
   denyHookCall(command, `Scopebond hook failed closed: ${(error as Error | null)?.message ?? String(error)}. Repair: reinstall the Scopebond hook, then run its doctor command.`);

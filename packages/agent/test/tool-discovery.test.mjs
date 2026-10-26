@@ -9,13 +9,13 @@ import { scaffold } from "@scopebond/hook";
 import { discoverTools, toolLines, runSelfCheck, selfCheckProof, MAX_MCP_SERVERS, MAX_MCP_NAME } from "../dist/index.js";
 import { tomlServerNames, parseVersion, mcpServerName, parseLenientJson, jsonServerNames, programVersion } from "../dist/tools.js";
 
-const ENV_KEYS = ["HOME", "USERPROFILE", "APPDATA", "XDG_CONFIG_HOME", "COPILOT_HOME"];
+const ENV_KEYS = ["HOME", "USERPROFILE", "APPDATA", "XDG_CONFIG_HOME", "COPILOT_HOME", "SCOPEBOND_HOME"];
 
 /** Run `fn` with a fresh fixture home as this process's home (and VS Code's and Copilot's folders inside it). */
 async function inHome(fn) {
   const home = mkdtempSync(join(tmpdir(), "sb-tools-home-"));
   const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
-  process.env.HOME = home; process.env.USERPROFILE = home;
+  process.env.HOME = home; process.env.USERPROFILE = home; process.env.SCOPEBOND_HOME = join(home, ".scopebond");
   process.env.APPDATA = join(home, "AppData", "Roaming");
   process.env.XDG_CONFIG_HOME = join(home, ".config");
   delete process.env.COPILOT_HOME;

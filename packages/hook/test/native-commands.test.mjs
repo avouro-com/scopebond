@@ -82,8 +82,8 @@ function isolatedHome() {
 test("a shared npx hook on a computer without npx: this computer is covered without changing the shared file", async () => {
   const { coverWithoutNpx, placeHook, configuredHookCommands, writeHarnessConfig } = await import("../dist/index.js");
   const { home, env } = isolatedHome();
-  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
-  Object.assign(process.env, { HOME: env.HOME, USERPROFILE: env.USERPROFILE });
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, SCOPEBOND_HOME: process.env.SCOPEBOND_HOME };
+  Object.assign(process.env, { HOME: env.HOME, USERPROFILE: env.USERPROFILE, SCOPEBOND_HOME: env.SCOPEBOND_HOME });
   try {
     const exe = join(home, "Programs", "Scopebond", "scopebond-agent.exe");
     mkdirSync(join(home, "Programs", "Scopebond"), { recursive: true });

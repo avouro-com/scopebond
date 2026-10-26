@@ -13,6 +13,12 @@ export function isSingleExecutable(): boolean {
 /** Set to true by the engine bundle's build (esbuild `define`): the bundle is one file that is also the command line. */
 declare const __SCOPEBOND_HOOK_BUNDLE__: boolean | undefined;
 
+/** Whether this process runs a signed build: the single executable, or the signed engine bundle (which the executable loads,
+ *  and which the agent runs with Node to check it). An npm install is neither. */
+export function isSignedBuild(): boolean {
+  return isSingleExecutable() || (typeof __SCOPEBOND_HOOK_BUNDLE__ === "boolean" && __SCOPEBOND_HOOK_BUNDLE__);
+}
+
 /** This package's command-line program (npm installs; meaningless in the single executable). In the engine bundle it is
  *  the bundle file itself, which Node runs as the command line. */
 export function hookCliPath(): string {
