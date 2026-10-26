@@ -43,6 +43,7 @@ import { packEngineLevel } from "./pack-store.js";
 import { fatigueHeaderValue, FATIGUE_HEADER } from "./fatigue.js";
 import { HOOK_FAILURES_CAPABILITY, HOOK_FAILURES_HEADER, hookFailuresHeaderValue } from "./hook-errors.js";
 import { removeBlocklist, syncInstallBlocklist, SAFE_INSTALL_HEADER } from "./install-verdicts.js";
+import { checkTrust, forgetTrustRecord, hasTrustRecord, rebindPackFiles, recordTrustedAnswer } from "./policy-trust.js";
 
 /** What this computer sends the workspace about its own delivery queue with each rules check, so
  *  the portal can say "checking in but not delivering" instead of "reporting". Counts and one
@@ -81,6 +82,14 @@ function deliveryHeaders(dir: string): Record<string, string> {
  *  so the next check fetches and installs the workspace's rules again instead of answering "unchanged". */
 function policyFileParses(dir: string): boolean {
   try { JSON.parse(readFileSync(join(dir, "policy.json"), "utf8").replace(/^\uFEFF/, "")); return true; } catch { return false; }
+}
+/** Whether the workspace's rules on this computer still match the verified answer they came from (policy-trust.ts), and that
+ *  answer is the version the rules state says is in force (an older answer and its files put back are not "unchanged"). True
+ *  where the check does not apply. */
+function trustIntact(dir: string, meta: ManagedMeta): boolean {
+  const check = checkTrust(dir);
+  if (!check.applies) return true;
+  return check.ok && check.revision === meta.revision && check.rulesDigest === meta.rules_digest;
 }
 /** The grants digest (policy-signature.ts `digestGrants`) of the workspace document in force, or null. */
 function installedGrantsDigest(dir: string): string | null {
@@ -141,6 +150,8 @@ export function hookCapabilities(level: number = packEngineLevel()): string[] {
 }
 
 export const SYNC_INTERVAL_MS = 5 * 60 * 1000;
+/** How often the check runs while the workspace's rules here do not match their signed answer (policy-trust.ts). */
+export const TRUST_RETRY_MS = 30 * 1000;
 const LOCK_FILE = "managed-sync.lock";
 const LOCK_STALE_MS = 2 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -254,7 +265,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     return true;
   };
 
-  const intact = policyFileParses(dir);
+  // A rules file that no longer parses, or workspace rules that no longer match their signed answer (policy-trust.ts), are
+  // fetched in full and installed again.
+  const intact = policyFileParses(dir) && trustIntact(dir, meta);
   let res: Response;
   try {
     res = await fetchImpl(`${base}/v1/policy`, {
@@ -338,7 +351,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       return { state: "disconnected" };
     }
     const dropped = backToOwnRules();
-    save({ revision: null, rules_digest: null, export_id: null, etag: null, last_error: "the workspace connection is no longer valid; this computer uses its own rules",
+    save({ revision: null, rules_digest: null, export_id: null, etag: null, policy_trust: null, last_error: "the workspace connection is no longer valid; this computer uses its own rules",
       ...(revoked.result === "verified" ? { policy_signature: { mode, last: "verified", reason: null, at }, ...issued(revoked.issuedAt) } : {}),
       ...(dropped ? { rules_dropped_at: at, rules_dropped_told: false } : {}) });
     return { state: "disconnected" };
@@ -358,7 +371,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     const confirmed = changed || !last || last.revision !== 0 || last.result !== "loaded"
       ? await ack({ export_id: `rev-0-${installationId}`, revision: 0, rules_digest: UNMANAGED_DIGEST, result: "loaded" }) : last;
     // Accepted again and the workspace sets no rules: its own rules are what the workspace asks for, nothing was dropped.
-    save({ revision: null, rules_digest: null, export_id: null, etag: null, last_ack: confirmed, last_error: null, policy_signature: admitted.state, ...issued(issuedAt), rules_dropped_at: null, rules_dropped_told: null });
+    save({ revision: null, rules_digest: null, export_id: null, etag: null, last_ack: confirmed, last_error: null, policy_signature: admitted.state, ...issued(issuedAt), rules_dropped_at: null, rules_dropped_told: null, policy_trust: null });
     return { state: "own_rules", changed };
   };
   if (res.status === 204) return toOwnRules(admitSigned({ result: "unsigned" }, mode, at), null);
@@ -370,10 +383,14 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     const renews = !latched || fresh.result === "verified";
     // Not modified covers the pack list too: every pack it confirmed is renewed by this check-in; a pack it named at a version
     // this computer could not fetch or check keeps its own clock. A list that was refused as a whole renews nothing.
-    if (renews && (packState?.complete || packState?.failed)) restampPacks(dir, now, packState.failed?.map((f) => f.id) ?? []);
+    if (renews && (packState?.complete || packState?.failed)) {
+      restampPacks(dir, now, packState.failed?.map((f) => f.id) ?? []);
+      // The renewed index is what the answer in force explains, when the files matched it before the renewal (policy-trust.ts).
+      if (intact) rebindPackFiles(dir);
+    }
     const confirmed = meta.last_ack?.revision === meta.revision && meta.last_ack.result === "loaded" ? meta.last_ack
       : await ack({ export_id: meta.export_id!, revision: meta.revision, rules_digest: meta.rules_digest!, result: "loaded" });
-    save({ last_ack: confirmed, last_error: fresh.result === "refused" ? `${fresh.message}; the rules in force stay and nothing was renewed` : null });
+    save({ last_ack: confirmed, last_error: fresh.result === "refused" ? `${fresh.message}; the rules in force stay and nothing was renewed` : null, ...(intact ? { policy_trust: null } : {}) });
     return { state: "unchanged", revision: meta.revision };
   }
   if (res.status !== 200) {
@@ -413,6 +430,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     || (toolSettingsMark(r) !== null && toolSettingsMark(r) !== installedToolSettingsMark(dir))
     || digestGrants(r) !== installedGrantsDigest(dir));
   // The same version already in force: confirm it again if the last confirmation did not land.
+  // A verified answer for rules installed without one (before this computer latched, or by an older version) is installed
+  // again instead, so the rules in force are kept with the signed answer that explains them (policy-trust.ts).
+  let reinstall = false;
   if (sameVersion && !switchChanged) {
     // Checked like a new answer: the version in force served again without its signature (or with a bad one) is not
     // confirmed as loaded, and what `status` says about the last answer stays true.
@@ -423,15 +443,20 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       save({ last_ack: confirmed, policy_signature: again.admitted.state, last_error: again.admitted.message });
       return { state: "refused", revision: meta.revision, reason, message: again.admitted.message, signature: again.admitted.reason };
     }
-    if (again.issuedAt) takeFreshness(r.freshness, { revision: meta.revision!, managed: true, etag });
-    await syncPackList(r);
-    const confirmed = meta.last_ack?.revision === meta.revision && meta.last_ack.result === "loaded" ? meta.last_ack
-      : await ack({ export_id: meta.export_id!, revision: meta.revision!, rules_digest: meta.rules_digest!, result: "loaded" });
-    save({ etag, grants_digest: digestGrants(r), last_ack: confirmed, last_error: null, policy_signature: again.admitted.state, ...issued(again.issuedAt) });
-    return { state: "unchanged", revision: meta.revision! };
+    reinstall = again.issuedAt !== null && !hasTrustRecord(dir);
+    if (!reinstall) {
+      if (again.issuedAt) takeFreshness(r.freshness, { revision: meta.revision!, managed: true, etag });
+      await syncPackList(r);
+      // The pack list just renewed is the answer in force's, and the files matched it ("same version" needs that).
+      rebindPackFiles(dir);
+      const confirmed = meta.last_ack?.revision === meta.revision && meta.last_ack.result === "loaded" ? meta.last_ack
+        : await ack({ export_id: meta.export_id!, revision: meta.revision!, rules_digest: meta.rules_digest!, result: "loaded" });
+      save({ etag, grants_digest: digestGrants(r), last_ack: confirmed, last_error: null, policy_signature: again.admitted.state, ...issued(again.issuedAt), policy_trust: null });
+      return { state: "unchanged", revision: meta.revision! };
+    }
   }
   // Reinstalling the version in force (a switch changed, or the rules file on disk no longer parses) is not a stale revision.
-  const inspected = inspectManaged(raw, switchChanged || !intact ? { installationId, currentRevision: null }
+  const inspected = inspectManaged(raw, switchChanged || reinstall || !intact ? { installationId, currentRevision: null }
     : { installationId, currentRevision: isManaged(dir) ? meta.revision : null, currentDigest: isManaged(dir) ? meta.rules_digest : null });
   const echo = typeof r.export_id === "string" && Number.isInteger(r.revision) && typeof r.rules_digest === "string" && /^[0-9a-f]{64}$/.test(r.rules_digest)
     ? { export_id: r.export_id, revision: r.revision as number, rules_digest: r.rules_digest } : null;
@@ -455,12 +480,16 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     save({ last_ack: confirmed, last_error: installed.message });
     return { state: "refused", revision: doc.revision, reason: installed.reason, message: installed.message };
   }
+  // A verified answer is kept as received beside what it compiled to, and the files are checked against it on every change
+  // (policy-trust.ts); rules installed from an unsigned answer (dual mode, never latched) are not covered.
+  if (issuedAt) recordTrustedAnswer(dir, r); else forgetTrustRecord(dir);
   options.afterPolicyWrite?.(dir);
   if (issuedAt) takeFreshness(r.freshness, { revision: doc.revision, managed: true, etag });
   await syncPackList(r);
+  if (issuedAt) rebindPackFiles(dir);
   const confirmed = await ack({ export_id: doc.export_id, revision: doc.revision, rules_digest: doc.rules_digest, result: "loaded", skipped_rules: inspected.skipped });
   save({ revision: doc.revision, rules_digest: doc.rules_digest, export_id: doc.export_id, etag, grants_digest: digestGrants(r), last_ack: confirmed, last_error: null, rule_notes: inspected.notes.length ? inspected.notes : null, skipped_rules: inspected.skipped.length ? inspected.skipped : null,
-    policy_signature: admitted.state, ...issued(issuedAt), rules_dropped_at: null, rules_dropped_told: null });
+    policy_signature: admitted.state, ...issued(issuedAt), rules_dropped_at: null, rules_dropped_told: null, policy_trust: null });
   return { state: "applied", revision: doc.revision };
 }
 
@@ -476,7 +505,11 @@ export async function syncIfDue(dir: string, makeOptions: () => SyncOptions, bud
     // on every tool call.
     const meta = readMeta(dir);
     const last = Math.max(meta.checked_at ? Date.parse(meta.checked_at) : 0, meta.last_attempt_at ? Date.parse(meta.last_attempt_at) : 0);
-    if (last && now - last < SYNC_INTERVAL_MS) return null;
+    // Workspace rules that no longer match their signed answer (policy-trust.ts) are fetched again at once, then every 30 s
+    // while they still do not.
+    const mismatch = meta.policy_trust ? Date.parse(meta.policy_trust.at) : NaN;
+    const due = Number.isFinite(mismatch) ? mismatch > last || now - last >= TRUST_RETRY_MS : now - last >= SYNC_INTERVAL_MS;
+    if (last && !due) return null;
     if (!claimSyncLock(join(dir, LOCK_FILE), now)) return null;
     const budget = Number.isFinite(budgetMs) && budgetMs > 0 ? budgetMs : INLINE_BUDGET_MS;
     const work = Promise.resolve()

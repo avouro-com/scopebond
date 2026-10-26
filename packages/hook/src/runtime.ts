@@ -15,6 +15,7 @@ import { explainDeny, FINAL_INSTRUCTION } from "./explain.js";
 import { RULES_FILE, loadRules } from "./rules.js";
 import { allowsLocalChanges, enforcedRuleIds, isManaged, packRuleAdjustmentsAt } from "./managed.js";
 import { localPackRuleIds, withPackRules } from "./pack-rules.js";
+import { assertTrusted } from "./policy-trust.js";
 import { applyRootScope } from "./paths.js";
 import { withActionGroup, actionGroupId, ACTION_GROUP_PARAM } from "./group.js";
 import { cliCommand } from "./version.js";
@@ -81,6 +82,9 @@ export interface RuntimeConfig {
   /** The signed plugin this hook loaded (intel-plugin.ts), asked about each action before it is decided; its answer is
    *  signed into the receipt as `pattern_id` and `intel`. Absent or null: receipts carry neither, exactly as before. */
   intel?: IntelPlugin | null;
+  /** Check the workspace's rules against the signed answer they came from before using them (policy-trust.ts; the default).
+   *  Only `flush`, which decides nothing, passes false. */
+  verifyTrust?: boolean;
 }
 
 export interface Decision {
@@ -504,6 +508,9 @@ export function createHookRuntime(config: RuntimeConfig) {
   // The keys, the credential, the receipt log and its journal files: readable by this user alone, those an older version
   // left included. Done once per folder; afterwards a small check.
   ensurePrivateDir(dirname(config.policyPath));
+  // A computer whose rules a workspace manages under a verified answer uses them only while they match that answer
+  // (policy-trust.ts): a few file stats per call, the full check once per change. A mismatch throws, which denies the call.
+  if (config.verifyTrust !== false) assertTrusted(dirname(config.policyPath));
   // Paths are signed with the home folder masked (home-mask.ts), so a rule that names the home folder by its full path
   // is rewritten the same way to keep matching.
   const homes = config.homeFolders ?? homeFolders();
