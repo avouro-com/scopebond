@@ -36,6 +36,8 @@ export interface OverrideQuestion {
 export interface OverrideAnswer {
   /** `quiet`: keep it blocked and do not ask again (a newer hook only offers it). */
   decision: "allow" | "deny" | "unavailable" | "ask" | "quiet"; reason?: string; os_user?: string; lasts?: "once" | "15m" | "1h" | "tomorrow" | "always"; later?: true; link?: string;
+  /** `local_unverified`: the answer came over the agent's local channel (the tray), which cannot show a person gave it. */
+  approval?: "local_unverified";
 }
 export type Prompter = (question: OverrideQuestion) => Promise<OverrideAnswer>;
 

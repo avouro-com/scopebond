@@ -252,7 +252,8 @@
             el("span", {}, [lengthName(b, c), admin ? el("small", { id: "admin-" + id, text: "needs admin approval" }) : null]),
           ]);
         }))]),
-      waitsForAdmin ? el("p", { class: "meta", text: "Allowed for 15 minutes while you wait for an admin." }) : null,
+      // The agent sends a longer choice as a request and allows the action once meanwhile, where once is offered.
+      waitsForAdmin ? el("p", { class: "meta", text: o.once ? "Allowed once now while you wait for an admin." : "Nothing is allowed until an admin approves." }) : null,
     ].concat(whyChoices(b, id), [
       el("div", { class: "acts" }, [
         el("button", { class: "btn primary", type: "button", "data-key": "confirm-" + id, disabled: !enough || !!s.busy, "aria-busy": busy ? "true" : null,

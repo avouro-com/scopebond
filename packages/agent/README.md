@@ -349,15 +349,23 @@ and `/blocked` (an earlier block, answered in the Scopebond window) do the work.
 
 The tray's own panel answers earlier blocks and lists what came of them, over the same channel and token:
 
-- `POST /blocked/answer` with `{ action_id, choice, reason }`, where `choice` is `once`, `fifteen`, `always` or `ask`. The
-  agent checks it again as the Scopebond window would (the block is still offered, the workspace offers that choice for
-  it now, the reason is at least the workspace's minimum and at most 500 characters, with no control characters but line
-  breaks), then applies it exactly as the window's answer is applied: an allowance (once, 15 minutes, or always — waiting
-  for an admin, with 15 minutes meanwhile, when the workspace says so) or a request to an admin on this computer, sent to
-  the workspace signed by this computer's key (`/v1/allowances`, `/v1/requests`). It answers `{ outcome, choice, text }`:
-  `allowed`, `proposed`, `asked`, or why not (`gone`, `not_offered`, `reason_short`, `invalid`), and the words the tray
-  shows ("Allowed once · Recorded and sent to Acme"). Scopebond never runs the action: the person or the coding agent
-  runs it again.
+- `POST /blocked/answer` with `{ action_id, choice, reason, scope?, once_now? }`, where `choice` is `once`, `fifteen`,
+  `hour`, `tomorrow`, `always`, `ask` or `quiet`. The agent checks it again as the Scopebond window would (the block is
+  still offered, the workspace offers that choice for it now, the reason is at least the workspace's minimum and at most
+  500 characters, with no control characters but line breaks). Any program running as the person can read the channel's
+  token, the coding agent among them, so nothing on the channel shows that a person answered. So only the next try is
+  allowed on this computer from an answer here: `once` makes a one-time allowance marked `approval: "local_unverified"`
+  in the record sent to the workspace. A longer choice (a length, `always`, or `scope: "similar"`) makes no allowance
+  here: it becomes a request to an admin (`asked_for` says what was chosen), and the action is allowed once now where
+  once is offered, unless `once_now: false`. A longer choice is refused when the computer is not connected to a
+  workspace (`needs_workspace`) or the workspace takes no requests for the block (`not_offered`). `ask` and `quiet`
+  work as before. Allowances and requests are sent signed by this computer's key (`/v1/allowances`, `/v1/requests`).
+  It answers `{ outcome, choice, text }`: `allowed`, `asked`, `quiet`, or why not (`gone`, `not_offered`,
+  `needs_workspace`, `reason_short`, `invalid`), and the words the tray shows ("Allowed once · recorded in Acme"); with
+  `approval` when something was allowed, and `requested` and `allowed_once` for a longer choice. The block's `offers`
+  in `GET /tray` say what may be chosen from here: no lengths, and `always` and similar commands only as requests
+  (`always_needs_admin`, `similar.needs_admin`). Scopebond never runs the action: the person or the coding agent runs it
+  again.
 - `GET /allowances`: the allowances that still apply and those waiting for an admin, newest first: what (the text the
   window showed, when this computer knows it), the rule and its name, the choice (`once`, `fifteen`, `always`), the state
   (`active` or `proposed`), who made it (the person, or an admin) and when it ends. From `allowances.json` with the rules
@@ -383,7 +391,10 @@ in the tray, and only there: no Scopebond window opens beside it, so one block a
   shortest reason and the `deadline` (when the hook stops waiting). `GET /tray` carries it as `pending`.
 - `POST /override/open` with `{ action_id }`: the person opened it in the tray.
 - `POST /override/answer` with `{ action_id, choice, reason }`: the person's answer, checked as the window's would be,
-  becomes the hook's answer. The question stays in the tray for the hook's whole wait; unanswered at the deadline,
+  becomes the hook's answer: `once` (an allow marked `approval: "local_unverified"`), `ask` or `quiet`. A longer choice
+  becomes the hook's request to an admin, and nothing is allowed now; it is refused when the computer is not connected
+  (`needs_workspace`) or the workspace takes no requests (`not_offered`), and the question keeps waiting. The question's
+  `offers` say so: once, or asking an admin. The question stays in the tray for the hook's whole wait; unanswered at the deadline,
   nothing is allowed. With no tray listening, the window opens at once on macOS and Linux. On Windows the Windows Forms
   window is retired: it opens only with `SCOPEBOND_PROMPT_WINDOW=1` (kept for one release); otherwise the agent answers
   `{ decision: "unavailable", later: true, link? }` at once, and the hook's denial tells the person to allow the block,

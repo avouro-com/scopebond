@@ -9,7 +9,7 @@ import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, re
 import { homedir, hostname, release, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
-  actOnBlocked, blockedQuestion, QUIET_BLOCK_DAYS, findClause, recordFatigue, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleSummary, ruleName, ruleTitle,
+  actOnBlocked, blockedQuestion, digestOf, markBlocked, queueRequest, readRequests, writeRequests, QUIET_BLOCK_DAYS, findClause, recordFatigue, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleSummary, ruleName, ruleTitle,
   automaticHarnesses, checkConfigPath, dedupeHooks, duplicateHooks, refreshIfDue, readDeliveryState, writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
@@ -31,7 +31,8 @@ import { createHookActivityTracker } from "./hook-activity.js";
 import { HOOK_ACTIVITY_ROUTE } from "@scopebond/hook";
 import { flushReasons, queueReason } from "./override-reasons.js";
 import { parseQuestion, serialized, systemPrompter, type Prompter } from "./prompt.js";
-import { livePrompt, windowAllowed } from "./live-prompt.js";
+import { livePrompt, windowAllowed, type LiveQuestion } from "./live-prompt.js";
+import { LOCAL_APPROVAL, localOffers, longerRefused, markLocalApproval, persistentChoice, requestedText } from "./local-answers.js";
 import { healthOf, type HealthLevel } from "./health.js";
 import { notifyChange, startTray } from "./tray.js";
 import { sendAllowancesAndRequests } from "./allowance-sender.js";
@@ -790,6 +791,7 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     let policy: ExplainPolicy | undefined;
     try { policy = JSON.parse(readFileSync(join(options.dir, "policy.json"), "utf8")) as ExplainPolicy; } catch { /* no why lines */ }
     let asked = 0;
+    const connected = !!loadConnection(options.dir);
     return blocks.map((b) => {
       const item = b.action_id ? known.get(b.action_id) : undefined;
       const rule = b.rule ?? item?.rule ?? null;
@@ -800,12 +802,13 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const workspaceQuiet = !request && !allowed && !quiet && b.quiet === true;
       // What the workspace offers, for the newest QUESTIONS_MAX blocks not acted on (each question reads the hook's files).
       const q = item && !item.acted && b.action_id && !request && !allowed && !quiet && !workspaceQuiet && asked++ < QUESTIONS_MAX ? blockedQuestion(options.dir, b.action_id, now) : null;
-      const offers = q ? {
+      // What the tray may offer from here (localOffers): the next try alone, and any longer choice only as a request to an admin.
+      const offers = q ? localOffers({
         once: q.offers.allow, fifteen: q.offers.fifteen, hour: q.offers.hour, tomorrow: q.offers.tomorrow, quiet: true, always: q.offers.always, always_days: q.offers.always ? q.always_days : null,
         always_needs_admin: q.offers.always && q.always_needs_admin, ask: q.offers.ask, reviewed: q.reviewed,
         // "Similar commands in this project", where the hook offers it: the words and the examples the form shows.
         similar: q.similar ?? null,
-      } : null;
+      }, connected) : null;
       const what = b.what ?? b.summary;
       const ruleTitleText = ruleTitle(rule) ?? b.rule_title ?? ruleName(rule);
       const tool = toolName(b.harness ?? item?.harness ?? null);
@@ -960,16 +963,19 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     } finally { working = null; }
   };
 
+  // The question waiting now, with what the tray may offer for it (localOffers): once, or asking an admin. A longer choice for
+  // it could only be the hook's own request, with nothing allowed meanwhile, which "Ask an admin" already is.
+  const liveForTray = (q: LiveQuestion | null): LiveQuestion | null => (q ? { ...q, offers: localOffers(q.offers, false) } : null);
   const control = await startControl(options.dir, `${AGENT_VERSION} hook/${hookVersion()}`, {
     // What the tray draws, and the person's tray settings.
-    "GET /tray": () => ({ tray: { ...trayState(), pending: live.current() }, settings: readTraySettings(options.dir) }),
+    "GET /tray": () => ({ tray: { ...trayState(), pending: liveForTray(live.current()) }, settings: readTraySettings(options.dir) }),
     // The live prompt: the tray waits here for the hook's question (the one waiting now, at once when it is not the one the
     // tray last saw), says when the person opened it, and sends the person's answer, which
     // the hook's waiting call receives. Checked as the window's answer would be; only the person at the computer sees the
     // tray's panel.
     "POST /override/wait": async (body) => {
       const seen = typeof (body as { seen?: unknown } | null)?.seen === "string" ? String((body as { seen: string }).seen) : null;
-      return { question: await live.wait(seen, 20_000) };
+      return { question: liveForTray(await live.wait(seen, 20_000)) };
     },
     // The tray says it showed a notification: counted for the workspace's view of how often people are interrupted (fatigue.ts).
     "POST /fatigue": (body) => {
@@ -985,13 +991,29 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const waiting = live.current();
       let os_user: string | undefined;
       try { os_user = userInfo().username; } catch { /* not known: the hook uses its own */ }
-      const done = live.answer(body, os_user);
+      const connected = !!loadConnection(options.dir);
+      // This channel cannot show that a person answered (localOffers): a longer choice is not applied here. It becomes a
+      // request a person approves in the workspace (the hook's own "Ask an admin"), and the action stays blocked now.
+      // Without a workspace, only once is possible.
+      const r = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+      const requested = waiting && r.action_id === waiting.action_id && typeof r.choice === "string" && persistentChoice(r.choice) ? r.choice as BlockedChoice : null;
+      if (waiting && requested) {
+        if (!waiting.offers[requested as "fifteen" | "hour" | "tomorrow" | "always"]) return { outcome: "not_offered", text: "Your workspace does not offer that choice for this action." };
+        const refused = longerRefused(connected, waiting.offers.ask, waiting.offers.once);
+        if (refused) return refused;
+      }
+      const done = live.answer(requested ? { ...r, choice: "ask" } : body, os_user, requested ? undefined : LOCAL_APPROVAL);
       if (!done.ok) return { outcome: done.outcome, text: done.text };
-      const outcome = done.choice === "ask" ? "asked" as const : done.choice === "quiet" ? "quiet" as const
-        : done.choice === "always" && waiting?.offers.always_needs_admin ? "proposed" as const : "allowed" as const;
-      log(`question under "${waiting?.rule_title ?? "a rule"}", answered in the tray: ${outcome} (${done.choice})`);
+      const outcome = done.choice === "ask" ? "asked" as const : done.choice === "quiet" ? "quiet" as const : "allowed" as const;
+      log(`question under "${waiting?.rule_title ?? "a rule"}", answered in the tray: ${outcome} (${requested ? `${requested}, sent as a request` : done.choice})`);
       if (outcome === "asked") pollAnswers();
-      return { outcome, choice: done.choice, text: answerText(outcome, done.choice, done.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), done.reviewed, Date.now(), waiting?.action_text || waiting?.what || null) };
+      const what = waiting?.action_text || waiting?.what || null;
+      if (requested) {
+        return { outcome, choice: requested, requested: LASTS_OF_CHOICE[requested] ?? "always", allowed_once: false,
+          text: requestedText(requested, false, done.always_days, summary?.workspace_name ?? null, what) };
+      }
+      return { outcome, choice: done.choice, ...(outcome === "allowed" ? { approval: LOCAL_APPROVAL } : {}),
+        text: answerText(outcome, done.choice, done.always_days, summary?.workspace_name ?? null, connected, done.reviewed, Date.now(), what) };
     },
     "POST /settings": (body) => ({ settings: writeTraySettings(options.dir, body) }),
     // "Check now" always says what it found.
@@ -1054,9 +1076,10 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     },
     // The same answer from the tray's own form instead of the Scopebond window: the person chose in the tray's panel, which
     // only the person at the computer sees, and the tray sends the choice and the reason here. Checked again as the window
-    // would be (the block is still offered, the choice is one the workspace allows, the reason is long enough), then applied
-    // exactly as the window's answer is: the allowance or the request on this computer, sent to the workspace signed by this
-    // computer's key. Scopebond never runs the action: the person or the coding agent runs it again.
+    // would be (the block is still offered, the choice is one the workspace allows, the reason is long enough). Only the next
+    // try is allowed here (local-answers.ts), marked as not verified; a longer choice becomes a request to an admin. Either is
+    // sent to the workspace signed by this computer's key. Scopebond never runs the action: the person or the coding agent
+    // runs it again.
     "POST /blocked/answer": (body) => {
       const parsed = parseBlockedAnswer(body);
       if (!parsed) return { outcome: "invalid", text: "That answer could not be read." };
@@ -1072,17 +1095,43 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       let os_user: string | undefined;
       try { os_user = userInfo().username; } catch { /* not known: the hook uses its own */ }
       const lasts = LASTS_OF_CHOICE[parsed.choice] ?? "once";
-      const answer = parsed.choice === "ask" ? { decision: "ask" as const, reason: parsed.reason, ...(os_user ? { os_user } : {}) }
-        : parsed.choice === "quiet" ? { decision: "quiet" as const, ...(os_user ? { os_user } : {}) }
-        : { decision: "allow" as const, reason: parsed.reason, lasts, ...(os_user ? { os_user } : {}), ...(parsed.scope === "similar" ? { scope: "similar" as const } : {}) };
-      const done = actOnBlocked(options.dir, parsed.action_id, answer);
-      if (done.outcome === "allowed" || done.outcome === "proposed" || done.outcome === "asked" || done.outcome === "quiet") setTimeout(() => { void sendReasons(); }, 1_000);
-      if (done.outcome === "asked") pollAnswers();
-      log(`earlier block under "${q.title}", answered in the tray: ${done.outcome} (${parsed.choice}${parsed.scope === "similar" ? ", similar" : ""})`);
+      const connected = !!loadConnection(options.dir);
+      const now = Date.now();
       // The result line says what was allowed: the command, or the similar commands in words.
       const what = parsed.scope === "similar" && q.similar ? q.similar.words.charAt(0).toLowerCase() + q.similar.words.slice(1) : q.item.summary || null;
-      return { outcome: done.outcome, choice: parsed.choice, ...(parsed.scope === "similar" ? { scope: "similar" } : {}),
-        text: answerText(done.outcome, parsed.choice, q.always_days, summary?.workspace_name ?? null, !!loadConnection(options.dir), q.reviewed, Date.now(), what) };
+      // This channel cannot show that a person answered (localOffers): a longer choice (a length, "always", similar commands)
+      // is not applied here. It becomes a request a person approves in the workspace ("Ask an admin", sent signed by this
+      // computer's key), and the action is allowed once now unless the answer says not to (`once_now: false`).
+      if (persistentChoice(parsed.choice, parsed.scope)) {
+        const refused = longerRefused(connected, q.offers.ask, q.offers.allow);
+        if (refused) return refused;
+        const request = queueRequest(options.dir, { rule: q.item.rule, action_key: q.item.action_key, action_id: q.item.id, summary: q.item.summary, reason: parsed.reason,
+          os_user_digest: os_user ? digestOf(os_user) : null, harness: q.item.harness, now });
+        // What the person asked for, beside the request; a workspace that does not read it ignores it.
+        const askedFor = { lasts, ...(parsed.scope === "similar" ? { scope: "similar" as const } : {}) };
+        writeRequests(options.dir, readRequests(options.dir).map((r) => (r.id === request.id ? { ...r, asked_for: askedFor } : r)), now);
+        const once = parsed.once_now !== false && q.offers.allow
+          && actOnBlocked(options.dir, parsed.action_id, { decision: "allow", reason: parsed.reason, lasts: "once", ...(os_user ? { os_user } : {}) }, now).outcome === "allowed";
+        if (once) markLocalApproval(options.dir, q.item.action_key, now);
+        else markBlocked(options.dir, parsed.action_id, "asked", now);
+        setTimeout(() => { void sendReasons(); }, 1_000);
+        pollAnswers();
+        log(`earlier block under "${q.title}", answered in the tray: sent as a request (${parsed.choice}${parsed.scope === "similar" ? ", similar" : ""})${once ? ", allowed once now" : ""}`);
+        return { outcome: "asked", choice: parsed.choice, ...(parsed.scope === "similar" ? { scope: "similar" } : {}), requested: lasts, allowed_once: once,
+          ...(once ? { approval: LOCAL_APPROVAL } : {}),
+          text: requestedText(parsed.choice, once, q.always_days, summary?.workspace_name ?? null, what, parsed.scope === "similar") };
+      }
+      const answer = parsed.choice === "ask" ? { decision: "ask" as const, reason: parsed.reason, ...(os_user ? { os_user } : {}) }
+        : parsed.choice === "quiet" ? { decision: "quiet" as const, ...(os_user ? { os_user } : {}) }
+        : { decision: "allow" as const, reason: parsed.reason, lasts: "once" as const, ...(os_user ? { os_user } : {}) };
+      const done = actOnBlocked(options.dir, parsed.action_id, answer, now);
+      // Allowed once from this channel: recorded as not verified to come from a person.
+      if (done.outcome === "allowed") markLocalApproval(options.dir, q.item.action_key, now);
+      if (done.outcome === "allowed" || done.outcome === "proposed" || done.outcome === "asked" || done.outcome === "quiet") setTimeout(() => { void sendReasons(); }, 1_000);
+      if (done.outcome === "asked") pollAnswers();
+      log(`earlier block under "${q.title}", answered in the tray: ${done.outcome} (${parsed.choice})`);
+      return { outcome: done.outcome, choice: parsed.choice, ...(done.outcome === "allowed" ? { approval: LOCAL_APPROVAL } : {}),
+        text: answerText(done.outcome, parsed.choice, q.always_days, summary?.workspace_name ?? null, connected, q.reviewed, now, what) };
     },
     // "Get help…": a support report the tray copies for the person (tray-model.ts supportBundle: no keys, records, commands
     // or reasons; failures in the log with the folders and anything token-shaped masked).
@@ -1300,7 +1349,7 @@ const CHOICES: readonly string[] = ["once", "fifteen", "hour", "tomorrow", "alwa
  *  (control characters other than line breaks are refused; none is an empty one, enough where the workspace asks for none),
  *  and what it covers (`scope`: "exact", the default, or "similar" for "Similar commands in this project", only with a length
  *  longer than once). The rest (offered, long enough) is checked against the block. */
-export function parseBlockedAnswer(raw: unknown): { action_id: string; choice: BlockedChoice; reason: string; scope?: "similar" } | null {
+export function parseBlockedAnswer(raw: unknown): { action_id: string; choice: BlockedChoice; reason: string; scope?: "similar"; once_now?: false } | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.action_id !== "string" || !/^[A-Za-z0-9._:-]{1,200}$/.test(r.action_id)) return null;
@@ -1311,7 +1360,9 @@ export function parseBlockedAnswer(raw: unknown): { action_id: string; choice: B
   if (r.scope !== undefined && r.scope !== "exact" && r.scope !== "similar") return null;
   // Similar commands are allowed for a length; the next try alone, asking an admin and keeping it blocked are about this action.
   if (r.scope === "similar" && (r.choice === "ask" || r.choice === "quiet" || r.choice === "once")) return null;
-  return { action_id: r.action_id, choice: r.choice as BlockedChoice, reason, ...(r.scope === "similar" ? { scope: "similar" as const } : {}) };
+  // A longer choice is sent as a request and allows the action once now; `once_now: false` asks only.
+  if (r.once_now !== undefined && typeof r.once_now !== "boolean") return null;
+  return { action_id: r.action_id, choice: r.choice as BlockedChoice, reason, ...(r.scope === "similar" ? { scope: "similar" as const } : {}), ...(r.once_now === false ? { once_now: false as const } : {}) };
 }
 
 /** A choice in the tray's form: the lengths (once, 15 minutes for older terms, 1 hour, until tomorrow, 30 days or the

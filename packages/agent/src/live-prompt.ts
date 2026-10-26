@@ -39,8 +39,9 @@ export interface LivePrompt {
   wait(seen: string | null, ms: number): Promise<LiveQuestion | null>;
   /** The person opened the question in the tray. */
   open(actionId: string): boolean;
-  /** The person's answer from the tray's form, checked against the question. */
-  answer(body: unknown, osUser?: string): { ok: true; choice: LiveChoice; reviewed: boolean; always_days: number } | { ok: false; outcome: "gone" | "invalid" | "not_offered" | "reason_short"; text: string };
+  /** The person's answer from the tray's form, checked against the question. `approval` marks an allow that came over the
+   *  agent's local channel (local-answers.ts). */
+  answer(body: unknown, osUser?: string, approval?: "local_unverified"):{ ok: true; choice: LiveChoice; reviewed: boolean; always_days: number } | { ok: false; outcome: "gone" | "invalid" | "not_offered" | "reason_short"; text: string };
   current(): LiveQuestion | null;
   close(): void;
 }
@@ -147,7 +148,7 @@ export function livePrompt(options: { fallback: Prompter; now?: () => number; wi
       pending.published.opened = true;
       return true;
     },
-    answer(body, osUser) {
+    answer(body, osUser, approval) {
       const r = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
       const p = pending;
       if (!p || r.action_id !== p.published.action_id) return { ok: false, outcome: "gone", text: "This question was answered or is no longer waiting." };
@@ -164,7 +165,8 @@ export function livePrompt(options: { fallback: Prompter; now?: () => number; wi
       if (reason.length > 500 || [...reason].some((c) => { const n = c.charCodeAt(0); return (n < 32 && n !== 10 && n !== 13) || n === 127; })) return { ok: false, outcome: "invalid", text: "That answer could not be read." };
       if (reason.length < p.question.reason_min) return { ok: false, outcome: "reason_short", text: `Say why in at least ${p.question.reason_min} characters.` };
       finish(p, choice === "ask" ? { decision: "ask", reason, ...user }
-        : { decision: "allow", reason, lasts: choice === "fifteen" ? "15m" : choice === "hour" ? "1h" : choice === "tomorrow" ? "tomorrow" : choice === "always" ? "always" : "once", ...user });
+        : { decision: "allow", reason, lasts: choice === "fifteen" ? "15m" : choice === "hour" ? "1h" : choice === "tomorrow" ? "tomorrow" : choice === "always" ? "always" : "once", ...user,
+          ...(approval ? { approval } : {}) });
       return { ok: true, choice, reviewed: p.published.offers.reviewed, always_days: p.published.offers.always_days ?? 30 };
     },
     close() {
