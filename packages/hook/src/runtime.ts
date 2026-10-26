@@ -258,7 +258,14 @@ const SETTINGS_FOLDERS = new Set([".scopebond", ".claude", ".cursor", ".codex", 
  *  files such a folder holds. */
 const HOME_PLACES = [".scopebond/policy.json", ".claude/settings.json", ".cursor/hooks.json", ".codex/hooks.json", ".codex/config.toml", ".copilot/hooks/scopebond.json", ".copilot/settings.json"];
 const INSIDE_PLACES = ["policy.json", "settings.json", "hooks.json", "config.toml", "hooks/scopebond.json"];
-const slashed = (p: string): string => p.replace(/\\/g, "/").replace(/\/+$/, "") || "/";
+const slashed = (p: string): string => {
+  let s = p.replace(/\\/g, "/");
+  // Trailing slashes trimmed by a scan, not a regular expression (no backtracking on a path made of slashes).
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47) end -= 1;
+  s = s.slice(0, end);
+  return s || "/";
+};
 
 /** A file write whose targets the command does not name (`tar -x`, `unzip`, `patch`, `git apply`) is judged by where it lands:
  *  in the home folder or a folder above it, in Scopebond's own folder or a coding tool's settings folder (or one inside them), or
@@ -302,6 +309,9 @@ function realPathOf(path: string): string | null {
 /** A file read or write through a link (a symbolic link, a junction) is judged where it lands as well: a path in an ordinary
  *  folder that leads into Scopebond's own folder or a coding tool's settings is also recorded as that place, so the floor sees it.
  *  A path only known at run time, or one that leads nowhere else, is left as it is. */
+/** A path segment of a place the floor guards: Scopebond's own folder, a coding tool's settings folder, an installed program. */
+const GUARDED_SEGMENT = /\/(?:\.scopebond|\.claude|\.cursor|\.codex|\.copilot)(?:\/|$)|\/Programs\/Scopebond(?:\/|$)|\/node_modules\/@scopebond\/(?:hook|agent)(?:\/|$)/i;
+
 export function realPathIntents(m: Mapped, cwd: string, homes: readonly string[]): Mapped[] {
   const type = m.intent.action_type;
   const path = m.intent.params.path;
@@ -313,6 +323,9 @@ export function realPathIntents(m: Mapped, cwd: string, homes: readonly string[]
   if (real === null) return [m];
   const same = (a: string, b: string): boolean => (process.platform === "win32" || process.platform === "darwin" ? a.toLowerCase() === b.toLowerCase() : a === b);
   if (same(slashed(real), slashed(absolute))) return [m];
+  // Only a link that lands in a place the floor guards adds the real path: an ordinary link (macOS /home, /tmp) adds nothing, so
+  // records keep the path as written (and its ~ masking).
+  if (!GUARDED_SEGMENT.test(slashed(real))) return [m];
   const rest: Mapped = { ...m, intent: { ...m.intent, params: { ...m.intent.params, path: slashed(real) } } };
   delete rest.shown;
   return [m, rest];

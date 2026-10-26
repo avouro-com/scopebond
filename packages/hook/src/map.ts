@@ -1691,7 +1691,8 @@ function namesDefined(sc: SimpleCommand): string[] {
  *  object (`(Get-Item f).Delete()`). Recorded as a read and a write of each such place (fail closed). */
 function powerShellReach(src: string, commands: SimpleCommand[], cwd?: string): Mapped[] {
   const text = src.slice(0, CODE_SCAN_LIMIT);
-  const joined = text.replace(PS_CONCAT, "").replace(/-join\b/i.test(text) ? PS_JOIN_LIST : /$^/, "");
+  const concatenated = text.replace(PS_CONCAT, "");
+  const joined = /-join\b/i.test(text) ? concatenated.replace(PS_JOIN_LIST, "") : concatenated;
   const builds = joined !== text;
   const launches = commands.some((c) => !c.opaque && PS_LAUNCHERS.has(canonProgram(c.program)));
   if (!builds && !launches && !PS_METHOD_CALL.test(text)) return [];
