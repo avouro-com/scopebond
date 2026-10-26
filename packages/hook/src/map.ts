@@ -13,7 +13,7 @@ import { homedir } from "node:os";
 import { posix } from "node:path";
 import { digest, keyedDigest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
 import { isCredentialName, maskWords, pipedSecrets, type PipedSecret } from "@scopebond/gateway";
-import { INTERPRETERS, assignmentsOf, canonProgram, decomposeShell, gitArgs, gitEnvConfigs, parseGitPush, type SimpleCommand } from "./shell.js";
+import { INTERPRETERS, assignmentsOf, canonProgram, decomposeShell, gitArgs, gitEnvConfigs, inlinePowerShell, parseGitPush, powershellText, type SimpleCommand } from "./shell.js";
 import { textOf, trimChars, trimEndChars } from "./text.js";
 import { derivePackMcp, derivePackTargets, type PackAction, type PackProbe } from "./packs.js";
 import { systemFiles } from "./infra-probe.js";
@@ -1813,7 +1813,7 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
   // PowerShell: `\` is a path separator and the backtick is the escape character
   // (``Re`move-Item`` runs Remove-Item). Normalize both before the POSIX parser sees
   // them, so neither hides a program or mangles a Windows path.
-  const src = dialect === "powershell" ? command.replace(/`(.)/g, "$1").replace(/\\/g, "/") : command;
+  const src = dialect === "powershell" ? powershellText(command) : command;
   // PowerShell text with no backtick keeps its own quoting through the normalization above.
   const plainPowerShell = dialect === "powershell" && !command.includes("`");
   const commands = decomposeShell(src, 0, [], dialect);
@@ -1905,9 +1905,13 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
     return out;
   };
   const out = walk(commands, false);
-  if (dialect === "powershell") {
+  // PowerShell text, whether the call is PowerShell or runs it inline (`pwsh -c '…'` from another shell, at any depth), is read
+  // for the places it builds or reaches through a launcher or a .NET call.
+  const powerShellTexts = dialect === "powershell" ? [src] : [];
+  for (const c of commands) { const script = inlinePowerShell(c); if (script !== null) powerShellTexts.push(script); }
+  if (powerShellTexts.length) {
     const have = new Set(out.filter(isFile).map(key));
-    for (const m of powerShellReach(src, commands, cwd)) if (!have.has(key(m))) { have.add(key(m)); out.push(m); }
+    for (const text of powerShellTexts) for (const m of powerShellReach(text, commands, cwd)) if (!have.has(key(m))) { have.add(key(m)); out.push(m); }
   }
   // A coding agent started with its config folder moved loads none of this computer's hooks: a switch-off. A part of the call
   // that does not parse is read again with its quote closed, so an unclosed quote cannot hide the agent; a program known only at
