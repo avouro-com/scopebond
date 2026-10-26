@@ -151,7 +151,8 @@ test("a request file is read only when it is itself a small regular file", async
   const link = join(paths.requests, "503-0123456789abcdef.json");
   let linked = true;
   try { symlinkSync(target, link); } catch { linked = false; }
-  if (linked) assert.throws(() => readRequest(link), "a link is not followed");
+  // macOS and Linux only: Windows has no O_NOFOLLOW, and the root updater runs on macOS alone.
+  if (linked && process.platform !== "win32") assert.throws(() => readRequest(link), "a link is not followed");
   if (process.platform !== "win32") {
     const fifo = join(paths.requests, "504-0123456789abcdef.json");
     spawnSync("mkfifo", [fifo]);

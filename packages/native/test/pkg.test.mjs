@@ -32,11 +32,13 @@ const PLIST_PATH = `/Library/LaunchAgents/${LABEL}.plist`;
 const UNINSTALL_PATH = "/Library/Application Support/Scopebond/uninstall.sh";
 
 test("the package's files agree with the agent: its path, its autostart label and its removal command", () => {
-  assert.deepEqual(PAYLOAD.map((f) => `/${f.path}`), [MAC_PACKAGE_EXE, PLIST_PATH, MAC_UPDATER_PLIST, UNINSTALL_PATH]);
+  assert.deepEqual(PAYLOAD.map((f) => `/${f.path}`), [MAC_PACKAGE_EXE, MAC_UPDATER_EXE, PLIST_PATH, MAC_UPDATER_PLIST, UNINSTALL_PATH]);
   // The updater the package runs as root: the agent's own command, started when a request lands in the agent's folder.
   const daemon = read("com.scopebond.updater.plist");
   assert.ok(daemon.includes(`<key>Label</key><string>${MAC_UPDATER_LABEL}</string>`));
-  assert.ok(daemon.includes(`<string>${MAC_PACKAGE_EXE}</string>\n    <string>${MAC_UPDATER_COMMAND}</string>`));
+  // It runs the root-only copy in /Library/PrivilegedHelperTools, never /usr/local/bin (which a person may own).
+  assert.ok(daemon.includes(`<string>${MAC_UPDATER_EXE}</string>\n    <string>${MAC_UPDATER_COMMAND}</string>`));
+  assert.ok(!daemon.includes(MAC_PACKAGE_EXE));
   assert.ok(daemon.includes(`<array><string>${MAC_UPDATER_PATHS.requests}</string></array>`), "WatchPaths is the requests folder");
   const postinstall = read("scripts", "postinstall");
   assert.ok(postinstall.includes('/bin/chmod 1733 "$SUPPORT/update-requests"') && postinstall.includes('/bin/chmod 0700 "$SUPPORT/updater"'));
