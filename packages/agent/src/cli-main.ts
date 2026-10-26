@@ -26,7 +26,7 @@ import { writeOutputTo } from "./log-file.js";
 import { refreshAppsEntry, writeAppsEntry } from "./apps-entry.js";
 import { runUninstall } from "./uninstall.js";
 import { installKind, MAC_PACKAGE_EXE, UPDATE_HELPER_COMMAND } from "./native-update.js";
-import { MAC_UPDATER_COMMAND, runMacUpdater } from "./mac-update.js";
+import { MAC_UPDATER_COMMAND, MAC_UPDATER_EXE, runMacUpdater } from "./mac-update.js";
 import { upkeepCommand } from "./upkeep.js";
 import { AGENT_VERSION, startService, takeOver } from "./service.js";
 import { agentProgram, npmProgram, setupCli } from "./commands.js";
@@ -97,8 +97,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       return;
     }
     case MAC_UPDATER_COMMAND: {
-      // Internal: the macOS package's updater (LaunchDaemon com.scopebond.updater) runs this as root (mac-update.ts).
-      if (process.platform !== "darwin" || process.getuid?.() !== 0 || process.execPath !== MAC_PACKAGE_EXE) {
+      // Internal: the macOS package's updater (LaunchDaemon com.scopebond.updater) runs this as root (mac-update.ts), from
+      // its own copy in /Library/PrivilegedHelperTools: never the copy in /usr/local/bin, which a person may own.
+      if (process.platform !== "darwin" || process.getuid?.() !== 0 || process.execPath !== MAC_UPDATER_EXE) {
         console.error(`${MAC_UPDATER_COMMAND} is run by the Scopebond package's updater itself`);
         process.exitCode = 1;
         return;

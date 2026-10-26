@@ -53,7 +53,12 @@ test("no build tool or dependency runs in a release job that can ask for the sig
   assert.match(all["sign-macos"], /needs: build-macos/);
   assert.match(all["sign-macos"], /name: unsigned-macos-\$\{\{ matrix\.arch \}\}/);
   assert.ok(!/id-token/.test(all["build-macos"]), "the macOS build has no OIDC token");
-  assert.match(all.release, /needs: \[build, sign-installer, defender-scan, build-macos, sign-macos\]/);
+  assert.match(all.release, /needs: \[build, sign-installer, seal, defender-scan, build-macos, sign-macos\]/);
+  assert.match(all.release, /needs\.seal\.result == 'success'/);
+  // The updater key signs in the seal job: no OIDC token, no Azure sign-in, no install (scripts/workflows.test.mjs).
+  assert.match(all.seal, /needs: \[build, sign-installer\]/);
+  assert.ok(!/id-token/.test(all.seal), "the seal job has no OIDC token");
+  assert.ok(!/UPDATER_SIGNING_KEY/.test(all["sign-installer"]), "the Authenticode job does not hold the updater key");
   // The macOS build must pass; its signed files join only when Apple signing ran.
   assert.match(all.release, /needs\.build-macos\.result == 'success'/);
   assert.match(all.release, /needs\.sign-macos\.result == 'success' \|\| needs\.sign-macos\.result == 'skipped'/);
@@ -63,7 +68,7 @@ test("no build tool or dependency runs in a release job that can ask for the sig
 test("Microsoft Defender scans the programs and the signed files before a release exists", () => {
   const all = jobs(workflow("native-release.yml"));
   assert.match(all.build, /defender-scan\.ps1 packages\/native\/build\/scopebond-agent\.exe packages\/native\/build\/scopebond-tray\.exe/);
-  assert.match(all["defender-scan"], /needs: sign-installer/);
+  assert.match(all["defender-scan"], /needs: seal/);
   assert.match(all["defender-scan"], /defender-scan\.ps1 @files/);
   assert.ok(!/id-token/.test(all["defender-scan"]), "the scan has no OIDC token");
   const script = readFileSync(join(native, "defender-scan.ps1"), "utf8");
@@ -163,13 +168,14 @@ test("the engine bundle is built where nothing can sign, signed with the updater
   assert.match(all.build, /node packages\/native\/hook-bundle\.mjs build packages\/native\/dist\/hook-bundle "\$env:COMMIT"/);
   assert.match(all.build, /name: unsigned-hook-bundle/);
   assert.ok(!all.build.includes("UPDATER_SIGNING_KEY"), "the build job has no signing key");
-  const signJob = all["sign-installer"];
-  assert.match(signJob, /name: unsigned-hook-bundle/);
+  assert.match(all["sign-installer"], /name: unsigned-hook-bundle/);
+  assert.match(all["sign-installer"], /out\/scopebond-hook-bundle-\*\.tgz/, "the bundle is attested");
+  // The updater key signs in the seal job (checkout, Node and the release scripts only).
+  const signJob = all.seal;
   const signStep = signJob.indexOf("node packages/native/hook-bundle.mjs sign out");
-  assert.ok(signStep > 0, "the sign-installer job signs the bundle manifest");
+  assert.ok(signStep > 0, "the seal job signs the bundle manifest");
   assert.ok(signStep < signJob.indexOf("SHA256SUMS"), "before the sums, so they list the signed manifest");
   assert.match(signJob.slice(signJob.lastIndexOf("- name:", signStep)), /UPDATER_SIGNING_KEY: \$\{\{ secrets\.UPDATER_SIGNING_KEY \}\}/);
-  assert.match(signJob, /out\/scopebond-hook-bundle-\*\.tgz/, "the bundle is attested");
   const on = workflow("native-release.yml").split("\npermissions:")[0];
   for (const path of ["packages/native/hook-bundle.mjs", "packages/native/src/hook-bundle-main.mjs"]) assert.ok(on.includes(`- ${path}`), path);
 });

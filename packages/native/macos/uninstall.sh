@@ -53,7 +53,7 @@ done
 
 /bin/launchctl bootout "system/$UPDATER" 2>/dev/null || true
 
-/bin/rm -f "$EXE" "$PLIST" "/Library/LaunchAgents/$TRAY.plist" "/Library/LaunchDaemons/$UPDATER.plist" /Library/Logs/Scopebond-updater.log
+/bin/rm -f "$EXE" "$PLIST" "/Library/LaunchAgents/$TRAY.plist" "/Library/LaunchDaemons/$UPDATER.plist" "/Library/PrivilegedHelperTools/$UPDATER" /Library/Logs/Scopebond-updater.log
 /bin/rm -rf /Applications/Scopebond.app
 /bin/rm -rf "$SUPPORT"
 /usr/sbin/pkgutil --forget "$PACKAGE_ID" >/dev/null 2>&1 || true

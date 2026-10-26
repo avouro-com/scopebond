@@ -14,8 +14,24 @@ SUPPORT="/Library/Application Support/Scopebond"
 /usr/sbin/chown root:wheel "$SUPPORT/update-requests" "$SUPPORT/updater"
 /bin/chmod 1733 "$SUPPORT/update-requests"
 /bin/chmod 0700 "$SUPPORT/updater"
+# The updater runs as root, so it starts only when nobody but root can change what it runs: its program, its property
+# list and every folder above them owned by root and writable by no group or other user, and neither one a link.
+root_only() {
+  for path in "$@"; do
+    [ ! -L "$path" ] || return 1
+    stat_line=$(/usr/bin/stat -f '%u %Lp' "$path" 2>/dev/null) || return 1
+    [ "${stat_line%% *}" = 0 ] || return 1
+    [ $(( 0${stat_line#* } & 022 )) -eq 0 ] || return 1
+  done
+}
+HELPER="/Library/PrivilegedHelperTools/$UPDATER"
+DAEMON_PLIST="/Library/LaunchDaemons/$UPDATER.plist"
 # The updater: loaded once. An update it installs itself runs this script too, and leaves the running updater alone.
-/bin/launchctl print "system/$UPDATER" >/dev/null 2>&1 || /bin/launchctl bootstrap system "/Library/LaunchDaemons/$UPDATER.plist" 2>/dev/null || true
+if root_only / /Library /Library/PrivilegedHelperTools "$HELPER" /Library/LaunchDaemons "$DAEMON_PLIST"; then
+  /bin/launchctl print "system/$UPDATER" >/dev/null 2>&1 || /bin/launchctl bootstrap system "$DAEMON_PLIST" 2>/dev/null || true
+else
+  echo "Scopebond: the updater was not started: $HELPER or a folder above it can be changed by someone other than root." >&2
+fi
 
 for uid in $(/bin/ps -axo uid=,comm= | /usr/bin/awk '$1 != 0 && $2 ~ /\/loginwindow$/ { print $1 }' | /usr/bin/sort -u); do
   /bin/launchctl bootstrap "gui/$uid" "$PLIST" 2>/dev/null || true

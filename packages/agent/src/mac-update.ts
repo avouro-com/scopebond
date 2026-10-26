@@ -19,7 +19,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fetchVerifiedInstaller, INSTALL_RESULT, readUpdatePending, updatesDir, type InstallResult } from "./native-update.js";
 import { MAC_SETTINGS_DOMAINS, readInstallerSetting, type RegistryReader } from "./signin.js";
@@ -29,6 +29,8 @@ export const MAC_UPDATER_LABEL = "com.scopebond.updater";
 /** The command the LaunchDaemon runs. */
 export const MAC_UPDATER_COMMAND = "update-daemon";
 export const MAC_UPDATER_PLIST = `/Library/LaunchDaemons/${MAC_UPDATER_LABEL}.plist`;
+/** The program the LaunchDaemon runs: the package's own copy of the executable in a folder only root can write. */
+export const MAC_UPDATER_EXE = `/Library/PrivilegedHelperTools/${MAC_UPDATER_LABEL}`;
 const SUPPORT = "/Library/Application Support/Scopebond";
 
 /** Where the updater's files are. Tests pass their own folders. */
@@ -119,6 +121,21 @@ export interface MacUpdaterOptions {
   log?: (line: string) => void;
 }
 
+/** A request file's text, or null: opened without following a link and without waiting on a pipe or device, and read only
+ *  when what was opened is a regular file of at most 1 KiB (a link to a pipe used to hang the root updater). */
+export function readRequest(file: string): string | null {
+  const fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > 1024) return null;
+    const buffer = Buffer.alloc(stat.size);
+    const read = readSync(fd, buffer, 0, stat.size, 0);
+    return buffer.subarray(0, read).toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /** The versions people's agents asked for (the files are removed as they are read; anything else in the folder is left). */
 function takeRequests(folder: string): string[] {
   const versions: string[] = [];
@@ -127,12 +144,10 @@ function takeRequests(folder: string): string[] {
   for (const name of names.filter((n) => /^-?\d+-[0-9a-f]{16}\.json$/.test(n))) {
     const file = join(folder, name);
     try {
-      const stat = lstatSync(file);
-      if (stat.isFile() && stat.size <= 1024) {
-        const v = (JSON.parse(readFileSync(file, "utf8")) as { version?: unknown }).version;
-        if (typeof v === "string" && /^\d+\.\d+\.\d+$/.test(v)) versions.push(v);
-      }
-    } catch { /* not a request */ }
+      const text = readRequest(file);
+      const v = text === null ? undefined : (JSON.parse(text) as { version?: unknown }).version;
+      if (typeof v === "string" && /^\d+\.\d+\.\d+$/.test(v)) versions.push(v);
+    } catch { /* not a request (a link, a pipe, unreadable) */ }
     rmSync(file, { force: true });
   }
   return versions;
