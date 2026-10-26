@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { PACK_PATTERN_MAX, POLICY_PATTERN_INPUT_MAX, POLICY_PATTERN_MAX, patternProblem } from "../dist/pattern.js";
 
 const REFUSED = {
-  "a repeated group that holds a repeat": ["(a+)+", "^(a*)*$", "((a+))+", "^(?:x*y)*$", "(?:a[^b]*)*", "(?:(?!.*x).)*", "(a{2,}){2,}"],
+  "a repeated group that holds a repeat": ["(a+)+", "^(a*)*$", "((a+))+", "^(?:x*x)*$", "(?:a[^b]*)*", "(?:[^.]+\\.?)*", "(?:a+a)*", "(?:(?!.*x).)*", "(a{2,}){2,}"],
   "a repeated group that can match nothing": ["(a?)*", "^(?:a|){20}$", "(?:\\b)+"],
   "alternatives under a repeat that can begin with the same character": ["(a|ab)*", "^(?:a|a)*$", "(?:\\d|[0-9a-f])+", "^(?:x(?:a|ab)y)+$", "(?:ab|ac){2,}"],
   "unbounded repeats next to each other": [".*.*", "^.*.*$", "\\w+\\d*", ".*x?.*", "(?:.*)(?:.*)", ".*(?!x).*", "a*(?:ab)*", "^[a-z]*[a-z]+$"],
@@ -22,6 +22,32 @@ const ACCEPTED = [
   "^(?![\\s\\S]*?(?:a|b))[\\s\\S]*$", "\\\\1", "[\\1]", "^(?!(?:.*/)?(?:\\.github/(?:workflows|actions)/.*|\\.travis\\.yml)$)",
   "^https://[a-z0-9.-]+/", "a{", "x]", "^(?<name>a)b$", "\\u0041\\x41\\cA\\0", "^(?:\\.[^/]*)?$",
 ];
+
+// A repeated group whose inner repeat is closed by a separator it cannot consume splits an input one way only.
+const SEPARATED = [
+  "^(?:(?:[^.]+\\.)+[eE][xX][aA][mM][pP][lL][eE]\\.[cC][oO][mM]|[aA][pP][iI]\\.[oO][rR][gG])$", // a host list with a wildcard
+  "^(?:[a-z0-9-]+\\.)*[a-z]+$", "^(?:[^/]+/)*[^/]*$", "^(?:x*y)*$", "^(?:[a-z]+-[0-9]+\\.)+$", "^(?:a*(?:b|c))*$",
+];
+ACCEPTED.push(...SEPARATED);
+
+test("separator-closed repeats in a repeated group are accepted, and run in linear time", () => {
+  for (const p of SEPARATED) assert.equal(patternProblem(p), null, `${JSON.stringify(p)}: ${patternProblem(p)}`);
+  // Long adversarial values: many turns, and one turn that never meets its separator, each followed by a mismatch.
+  // eslint-disable-next-line security/detect-non-literal-regexp -- the test's own accepted patterns, run to time them
+  const time = (pattern, value) => { const re = new RegExp(pattern); const t0 = performance.now(); re.test(value); return performance.now() - t0; };
+  for (const [p, values] of [
+    [SEPARATED[0], ["a.".repeat(50_000) + "x", "a".repeat(100_000), "a.".repeat(50_000) + "example.co"]],
+    [SEPARATED[1], ["a.".repeat(50_000) + "!", "a".repeat(100_000) + "!", "a-".repeat(50_000) + "."]],
+    [SEPARATED[2], ["a/".repeat(50_000) + "b/", "a".repeat(100_000)]],
+  ]) {
+    for (const v of values) {
+      const small = time(p, v.slice(0, 10_000)), large = time(p, v);
+      assert.ok(large < 250, `${p} on ${v.length} characters took ${large.toFixed(0)} ms`);
+      // Ten times the input stays within a generous linear factor (not the hundredfold a quadratic would take).
+      assert.ok(large < Math.max(small, 1) * 40, `${p}: ${small.toFixed(1)} ms for 10k, ${large.toFixed(1)} ms for 100k`);
+    }
+  }
+});
 
 test("shapes that can backtrack catastrophically are refused, each with its reason", () => {
   for (const [reason, patterns] of Object.entries(REFUSED)) {

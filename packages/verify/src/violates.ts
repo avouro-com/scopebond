@@ -129,7 +129,7 @@ export function validatePolicy(value: unknown): ValidationResult {
             for (const pattern of [bound.pattern, bound.items?.pattern]) {
               if (typeof pattern !== "string") continue;
               const problem = patternProblem(pattern, POLICY_PATTERN_MAX);
-              if (problem) errors.push(`/clauses/${clause.id}/exceptions/${field} has an invalid pattern: it ${problem}`);
+              if (problem) errors.push(`/clauses/${clause.id}/exceptions/${field} has an invalid pattern (${problem})`);
             }
           }
         }
@@ -147,7 +147,7 @@ export function validatePolicy(value: unknown): ValidationResult {
           for (const pattern of [bound.pattern, bound.items?.pattern]) {
             if (typeof pattern !== "string") continue;
             const problem = patternProblem(pattern, POLICY_PATTERN_MAX);
-            if (problem) errors.push(`/clauses/${clause.id}/param_bounds/${field} has an invalid pattern: it ${problem}`);
+            if (problem) errors.push(`/clauses/${clause.id}/param_bounds/${field} has an invalid pattern (${problem})`);
           }
         }
       }

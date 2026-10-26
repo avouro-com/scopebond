@@ -304,6 +304,8 @@ interface Shape {
   chars: CharSet;
   /** The characters it can begin with. */
   first: CharSet;
+  /** The characters it can end with. */
+  last: CharSet;
   /** It can consume an unbounded number of characters. */
   unbounded: boolean;
   /** The characters of an unbounded repeat it can begin with (null: it begins with none). */
@@ -364,6 +366,34 @@ function innerRepeatChars(node: Node): CharSet | null {
   }
 }
 
+/** Whether every repeat inside a repeated body is closed by a separator it cannot consume: directly followed, in its own
+ *  sequence, by a required part that cannot begin with any of its characters (`(?:[a-z0-9-]+.)*`, `(?:[^/]+/)*`). Each inner
+ *  repeat then stops at its separator and each turn ends there, so nothing is split two ways. */
+function terminated(node: Node): boolean {
+  const repeatOf = (n: Node): (Node & { t: "rep" }) | null => {
+    if (n.t === "rep") return n.max > 1 ? n : null;
+    if (n.t === "group" && n.body.t === "seq" && n.body.items.length === 1) return repeatOf(n.body.items[0]);
+    return null;
+  };
+  switch (node.t) {
+    case "char": case "assert": return true;
+    case "look": return !holdsRepeat(node.body);
+    case "group": return terminated(node.body);
+    case "alt": return node.alts.every(terminated);
+    case "rep": return node.max <= 1 && terminated(node.body);
+    case "seq":
+      return node.items.every((item, i) => {
+        const r = repeatOf(item);
+        if (r === null) return terminated(item);
+        if (holdsRepeat(r.body)) return false;
+        const next = node.items[i + 1];
+        if (next === undefined) return false;
+        const after = shape(next);
+        return !after.nullable && !after.unbounded && !overlaps(after.first, shape(r.body).chars);
+      });
+  }
+}
+
 /** Every alternation in a repeated body (outside look-arounds, which never backtrack into) must start unambiguously. */
 function checkAlternatives(node: Node): void {
   switch (node.t) {
@@ -388,21 +418,21 @@ function shape(node: Node, searched = false): Shape {
 
 function computeShape(node: Node, searched: boolean): Shape {
   switch (node.t) {
-    case "char": return { nullable: false, chars: node.set, first: node.set, unbounded: false, lead: null, trail: null, degree: 0, choices: 0 };
-    case "assert": return { nullable: true, chars: NONE, first: NONE, unbounded: false, lead: null, trail: null, degree: 0, choices: 0 };
+    case "char": return { nullable: false, chars: node.set, first: node.set, last: node.set, unbounded: false, lead: null, trail: null, degree: 0, choices: 0 };
+    case "assert": return { nullable: true, chars: NONE, first: NONE, last: NONE, unbounded: false, lead: null, trail: null, degree: 0, choices: 0 };
     case "look": {
       // Zero-width, and never backtracked into; what it costs at each position it is tried counts where it stands in a
       // sequence (`degree`).
       const inner = shape(node.body);
       // A look-around is matched once and never backtracked into: its own choices count on their own.
       if (inner.choices > MAX_CHOICES) throw new Refusal(CHOICES);
-      return { nullable: true, chars: NONE, first: NONE, unbounded: false, lead: null, trail: null, degree: inner.degree, choices: 0 };
+      return { nullable: true, chars: NONE, first: NONE, last: NONE, unbounded: false, lead: null, trail: null, degree: inner.degree, choices: 0 };
     }
     case "group": return shape(node.body);
     case "alt": {
       const all = node.alts.map((n) => shape(n, searched));
       return {
-        nullable: all.some((s) => s.nullable), chars: union(...all.map((s) => s.chars)), first: union(...all.map((s) => s.first)),
+        nullable: all.some((s) => s.nullable), chars: union(...all.map((s) => s.chars)), first: union(...all.map((s) => s.first)), last: union(...all.map((s) => s.last)),
         unbounded: all.some((s) => s.unbounded), lead: all.reduce<CharSet | null>((a, s) => either(a, s.lead), null),
         trail: all.reduce<CharSet | null>((a, s) => either(a, s.trail), null), degree: Math.max(...all.map((s) => s.degree)),
         choices: all.reduce((n, s) => n + s.choices, 0) + (alike(all) ? 1 : 0),
@@ -415,7 +445,7 @@ function computeShape(node: Node, searched: boolean): Shape {
         // (`(?:/[^/]+)*`): each turn then ends where the next begins, and nothing is split two ways.
         if (holdsRepeat(node.body)) {
           const inner = innerRepeatChars(node.body);
-          if (inner === null || overlaps(inner, body.first)) throw new Refusal(NESTED);
+          if (inner === null || (overlaps(inner, body.first) && !terminated(node.body))) throw new Refusal(NESTED);
         }
         if (body.nullable) throw new Refusal(EMPTY_BODY);
         checkAlternatives(node.body);
@@ -424,8 +454,9 @@ function computeShape(node: Node, searched: boolean): Shape {
       // body is.
       const large = node.max > LARGE_REPEAT;
       return {
-        nullable: node.min === 0 || body.nullable, chars: body.chars, first: body.first, unbounded: large || body.unbounded,
-        lead: large ? body.first : body.lead, trail: large ? body.chars : body.trail, degree: large ? 1 : body.degree,
+        nullable: node.min === 0 || body.nullable, chars: body.chars, first: body.first, last: body.last, unbounded: large || body.unbounded,
+        // At the edges an unbounded repeat is what a turn begins and ends with: `(?:[^.]+.)*[a-z]+` splits one way only.
+        lead: large ? body.first : body.lead, trail: large ? body.last : body.trail, degree: large ? 1 : body.degree,
         // A choice inside a repeated body is made again at every turn.
         choices: node.max > 1 ? body.choices * Math.min(node.max, MAX_CHOICES + 1) : body.choices,
       };
@@ -484,7 +515,13 @@ function sequenceShape(items: Node[], searched: boolean): Shape {
     maxDegree = Math.max(maxDegree, run);
     if (!s.nullable) nullable = false;
   }
-  return { nullable, chars: union(...chars), first: union(...first), unbounded, lead: lead.length ? union(...lead) : null, trail, degree: maxDegree, choices };
+  const lastSets: CharSet[] = [];
+  for (let i = items.length - 1; i >= 0; i--) {
+    const s = shape(items[i]);
+    lastSets.push(s.last);
+    if (!s.nullable) break;
+  }
+  return { nullable, chars: union(...chars), first: union(...first), last: union(...lastSets), unbounded, lead: lead.length ? union(...lead) : null, trail, degree: maxDegree, choices };
 }
 
 /** Why `pattern` is refused, or null when it is accepted. `maxLength` is the caller's cap (`PACK_PATTERN_MAX`,

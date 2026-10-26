@@ -31,7 +31,7 @@ test("a policy whose pattern can backtrack catastrophically is invalid, and viol
     const policy = bounded(pattern);
     const result = validatePolicy(policy);
     assert.equal(result.valid, false, `${pattern} is refused`);
-    assert.match(result.errors.join("; "), /\/clauses\/files\/param_bounds\/path has an invalid pattern: it /);
+    assert.match(result.errors.join("; "), /\/clauses\/files\/param_bounds\/path has an invalid pattern \(/);
     const v = violates(policy, [], act("file.write", { path: "a".repeat(40) + "!" }));
     assert.equal(v.violated, true, "an invalid policy is a violation, never an allow");
     assert.match(v.explanation, /^invalid policy: /);
@@ -41,7 +41,7 @@ test("a policy whose pattern can backtrack catastrophically is invalid, and viol
   assert.equal(validatePolicy(items).valid, false);
   const exception = bounded("^(?!/etc/).+", { exceptions: [{ path: { pattern: "^(?:a|ab)*$" } }] });
   assert.equal(validatePolicy(exception).valid, false);
-  assert.match(validatePolicy(exception).errors.join("; "), /exceptions\/path has an invalid pattern: it alternatives under a repeat/);
+  assert.match(validatePolicy(exception).errors.join("; "), /exceptions\/path has an invalid pattern \(alternatives under a repeat/);
 });
 
 test("ordinary bounded patterns stay valid", () => {
