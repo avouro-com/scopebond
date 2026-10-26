@@ -95,12 +95,19 @@ export function createToolGuard(config: ToolGuardConfig): ToolGuard {
     flush: () => exporter ? exporter.flush() : Promise.resolve(),
     stop: () => exporter?.stop(),
     async check(toolName, args = {}) {
-      const actionType = config.manifest?.[toolName] ?? `tool.${toolName}`;
+      // An own entry of the manifest only: a tool named `constructor` or `__proto__` is not mapped by Object's prototype.
+      const mapped = config.manifest && Object.hasOwn(config.manifest, toolName) ? config.manifest[toolName] : undefined;
+      const actionType = typeof mapped === "string" ? mapped : `tool.${toolName}`;
       const intent: Record<string, unknown> = { action_type: actionType, params: args };
       // Lift money fields so spend_limit clauses (which read the top-level asset /
-      // amount) apply to a mapped money tool.
-      if (typeof args.asset === "string") intent.asset = args.asset;
-      if (typeof args.amount === "number") intent.amount = args.amount;
+      // amount) apply to a mapped money tool. Only a value a spend limit can read is lifted (a nonempty string asset,
+      // a whole nonnegative amount); one it cannot read (an amount sent as text, an asset that is not a string) is
+      // left out, and the spend limit then denies the action as one missing its asset or amount, never reading it
+      // as spending nothing.
+      const asset = Object.hasOwn(args, "asset") ? args.asset : undefined;
+      const amount = Object.hasOwn(args, "amount") ? args.amount : undefined;
+      if (typeof asset === "string" && asset !== "") intent.asset = asset;
+      if (typeof amount === "number" && Number.isSafeInteger(amount) && amount >= 0) intent.amount = amount;
       const signed = agent.sign(intent as never);
       const result = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization });
       await config.onReceipt?.(result.receipt);

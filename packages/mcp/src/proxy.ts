@@ -14,7 +14,7 @@ import { canonical } from "@scopebond/policy-schema/canonical";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { describeToolCall, intentDraft, jsonString, manifestHash, outcomeDraft, type ExitCategory, type TypedAdapterConfig } from "./typed.js";
 import { historyBound, type HistoryLimit } from "./history-limit.js";
-import { memberVariantReason } from "./fold.js";
+import { foldName, memberVariantReason } from "./fold.js";
 
 export interface JsonRpcMessage {
   jsonrpc?: string;
@@ -132,6 +132,58 @@ const GOVERNED_METHODS = ["tools/call", "tools/list"] as const;
 const methodSkeleton = (method: string): string => method.normalize("NFKC").toLowerCase().replace(/[^a-z0-9]/g, "");
 const GOVERNED_SKELETONS = new Map<string, string>(GOVERNED_METHODS.map((m) => [methodSkeleton(m), m]));
 
+/** A tool name with width forms unified (NFKC) and case folded as member names are (fold.ts): two names with the same
+ *  skeleton could be one tool to an upstream that resolves tool names loosely. */
+const toolNameSkeleton = (name: string): string => foldName(name.normalize("NFKC"));
+
+/** The names of the upstream's last full tool list, for deciding which tool a call names. */
+interface ToolNames {
+  names: ReadonlySet<string>;
+  /** How many listed names share each skeleton. */
+  skeletons: ReadonlyMap<string, number>;
+}
+
+/** The tool names of a full `tools/list` result (entries without a string name are ignored). */
+function toolNamesOf(tools: unknown[]): ToolNames {
+  const names = new Set<string>();
+  for (const t of tools) {
+    const name = t !== null && typeof t === "object" && !Array.isArray(t) ? (t as { name?: unknown }).name : undefined;
+    if (typeof name === "string") names.add(name);
+  }
+  const skeletons = new Map<string, number>();
+  for (const name of names) { const s = toolNameSkeleton(name); skeletons.set(s, (skeletons.get(s) ?? 0) + 1); }
+  return { names, skeletons };
+}
+
+/** What the tool-list check found about a call's tool name, as recorded on the receipt (`tool_listing`). */
+type ToolListing = "unlisted" | "spelling_variant" | "ambiguous" | "no_list";
+const TOOL_LISTING_REASONS: Record<ToolListing, string> = {
+  no_list: "the upstream's tool list could not be read, so the tool name cannot be checked",
+  spelling_variant: "the tool name is another spelling of a listed tool; send the exact name from tools/list",
+  unlisted: "the tool is not in the upstream's tool list",
+  ambiguous: "the upstream lists more than one tool whose names differ only in case or width",
+};
+
+/** What is wrong with a `tools/call` naming `name` against the upstream's tool list, or undefined when the name is exactly
+ *  one listed tool and no other listed tool shares its skeleton. Without a list nothing can be confirmed: an upstream that
+ *  resolves names loosely (another case, a full-width form) could run a tool a rule denies by its exact name. */
+function toolListingFinding(listed: ToolNames | undefined, name: string): ToolListing | undefined {
+  if (!listed) return "no_list";
+  const skeleton = toolNameSkeleton(name);
+  if (!listed.names.has(name)) return listed.skeletons.has(skeleton) ? "spelling_variant" : "unlisted";
+  if ((listed.skeletons.get(skeleton) ?? 0) > 1) return "ambiguous";
+  return undefined;
+}
+
+/** Whether a tool-list finding blocks the call. It does where something blocks: a typed adapter in `enforce`, or, without
+ *  one, a policy with a clause that is not `monitor`. In monitor mode (a typed adapter in `monitor`, or a policy whose
+ *  clauses all monitor) the finding is recorded on the receipt and the call is forwarded, as other monitor findings are. */
+function toolListingEnforced(policy: unknown, typed: TypedAdapterConfig | undefined): boolean {
+  if (typed) return typed.mode === "enforce";
+  const clauses = (policy as { clauses?: unknown } | null)?.clauses;
+  return !Array.isArray(clauses) || clauses.some((c) => (c as { mode?: unknown } | null)?.mode !== "monitor");
+}
+
 /** The members of a JSON-RPC message, and of `tools/call` params. Only these are forwarded. */
 const JSONRPC_MEMBERS = ["jsonrpc", "id", "method", "params", "result", "error"] as const;
 const TOOLS_CALL_PARAMS = ["name", "arguments", "_meta"] as const;
@@ -226,7 +278,12 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
   };
   // The client's paginated listing in progress: the tools seen so far and the cursor it must ask for next.
   let clientListing: { tools: unknown[]; next: string; pages: number } | undefined;
-  const readToolList = async (): Promise<string | undefined> => {
+  // The names of the last full tool list read from the upstream (the client's own listing or the proxy's probe). A call
+  // is forwarded only under a name that is exactly one of them; with no list, or after a read that failed, none is.
+  const recheckMs = typed?.manifestRecheckMs ?? 60_000;
+  let listed: (ToolNames & { at: number }) | undefined;
+  const learnNames = (tools: unknown[] | undefined): void => { listed = tools ? { ...toolNamesOf(tools), at: nowMs() } : undefined; };
+  const readToolList = async (): Promise<unknown[] | undefined> => {
     const tools: unknown[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < 20; page++) {
@@ -234,23 +291,38 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
       const result = response?.result as { tools?: unknown; nextCursor?: unknown } | undefined;
       if (!result || !Array.isArray(result.tools)) return undefined;
       tools.push(...result.tools);
-      if (typeof result.nextCursor !== "string" || result.nextCursor === "") return manifestHash(tools);
+      if (typeof result.nextCursor !== "string" || result.nextCursor === "") return tools;
       cursor = result.nextCursor;
     }
     return undefined;
+  };
+  // One probe at a time: calls decided while it is in flight wait for the same list.
+  let probing: Promise<unknown[] | undefined> | undefined;
+  const probeToolList = (): Promise<unknown[] | undefined> => (probing ??= (async () => {
+    let tools: unknown[] | undefined;
+    try { tools = await readToolList(); } catch { tools = undefined; }
+    learnNames(tools);
+    return tools;
+  })().finally(() => { probing = undefined; }));
+  /** The tool list a call is checked against: read again when there is none, when it is older than the recheck
+   *  interval (at least a second, so one call never reads it twice), or when it does not name the tool and is more than
+   *  a second old (a tool added since). */
+  const namesRecheckMs = Math.max(recheckMs, 1000);
+  const listingEnforced = toolListingEnforced(config.policy, typed);
+  const toolNamesFor = async (name: string): Promise<ToolNames | undefined> => {
+    const age = listed ? nowMs() - listed.at : Infinity;
+    if (!listed || !(age < namesRecheckMs) || (!listed.names.has(name) && !(age < 1000))) await probeToolList();
+    return listed;
   };
   const manifestVerified = async (): Promise<boolean> => {
     if (!typed?.manifest) return false;
     if (mismatchSeen) return false;
     // A client listing that is still incomplete has shown pages nobody has checked yet.
     if (clientListing) return false;
-    const recheck = typed.manifestRecheckMs ?? 60_000;
-    if (nowMs() - verifiedAt < recheck) return verified;
-    let hash: string | undefined;
-    try { hash = await readToolList(); } catch { hash = undefined; }
-    // eslint-disable-next-line security/detect-possible-timing-attacks -- checks whether a tool list was read at all; no secret is compared
-    if (hash === undefined) { verified = false; verifiedAt = nowMs(); }
-    else learn(hash);
+    if (nowMs() - verifiedAt < recheckMs) return verified;
+    const tools = await probeToolList();
+    if (tools === undefined) { verified = false; verifiedAt = nowMs(); }
+    else learn(manifestHash(tools));
     return verified;
   };
 
@@ -259,8 +331,8 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
       const invalid = invalidMessageReason(raw);
       if (invalid) return invalidRequest((raw as { id?: unknown } | null)?.id, invalid);
       const message = rebuiltMessage(raw as Record<string, unknown>);
-      if (message.method === "tools/list" && typed?.manifest) {
-        // A client listing tools shows the live revision: learn it from every page it gets.
+      if (message.method === "tools/list") {
+        // A client listing tools shows the live tool names (and revision): learn them from every page it gets.
         const response = await config.upstream.call(message);
         const result = response?.result as { tools?: unknown; nextCursor?: unknown } | undefined;
         const cursor = message.params?.cursor;
@@ -273,8 +345,8 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
           clientListing = { tools, next: result.nextCursor, pages };
         } else {
           clientListing = undefined;
-          if (typeof result.nextCursor === "string" && result.nextCursor !== "") { verified = false; verifiedAt = nowMs(); }
-          else learn(manifestHash(tools));
+          if (typeof result.nextCursor === "string" && result.nextCursor !== "") { verified = false; verifiedAt = nowMs(); listed = undefined; }
+          else { learnNames(tools); if (typed?.manifest) learn(manifestHash(tools)); }
         }
         return response;
       }
@@ -303,7 +375,12 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
         // The adapter's own decision: unknown tools, revisions and unbound resources.
         const description = typed ? describeToolCall(typed, config.server, dispatched, await manifestVerified()) : undefined;
         const adapterDeny = typed?.mode === "enforce" && description !== undefined && !description.allow;
-        let decision: "allow" | "deny" = verdict.violated || adapterDeny || historyLost !== null ? "deny" : "allow";
+        // The call must name exactly one tool of the upstream's own list, so the name the rules were matched on is the
+        // tool that runs. Checked only for a call policy allows: a denied call is never forwarded anyway.
+        // In monitor mode a finding is recorded on the receipt and the call goes on; in enforce mode it is denied.
+        const listing = verdict.violated || historyLost !== null ? undefined : toolListingFinding(await toolNamesFor(intent.params.tool), intent.params.tool);
+        const unlisted = listing !== undefined && listingEnforced ? TOOL_LISTING_REASONS[listing] : undefined;
+        let decision: "allow" | "deny" = verdict.violated || adapterDeny || historyLost !== null || unlisted !== undefined ? "deny" : "allow";
 
         // The boundary, for a call policy has allowed. The exact request forwarded below is what an approval is bound to.
         let boundary: DispatchDecision | undefined;
@@ -326,8 +403,10 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
           if (!boundary.allow) decision = "deny";
         }
 
+        // A tool-list finding is recorded on the receipt's action, beside the tool name it is about.
+        const recorded = listing === undefined ? intent : { ...intent, params: { ...intent.params, tool_listing: listing } };
         const receipt = await buildPepReceipt(
-          { intent, policy: config.policy as never, principal: config.principal, realtimeResult: decision, now: config.now },
+          { intent: recorded, policy: config.policy as never, principal: config.principal, realtimeResult: decision, now: config.now },
           attester,
         );
         await config.onReceipt?.(receipt);
@@ -343,8 +422,9 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
         if (decision === "deny") {
           const why = verdict.violated ? (verdict.explanation || "out of policy")
             : historyLost !== null ? historyLost
-            : boundary && !boundary.allow ? `dispatch boundary: ${boundary.reason}${boundary.detail ? ` (${boundary.detail})` : ""}`
-            : `the typed adapter could not bind it (${description!.reasons.join("; ")})`;
+            : adapterDeny ? `the typed adapter could not bind it (${description.reasons.join("; ")})`
+            : unlisted !== undefined ? unlisted
+            : `dispatch boundary: ${boundary!.reason}${boundary!.detail ? ` (${boundary!.detail})` : ""}`;
           return {
             jsonrpc: "2.0",
             id: message.id ?? null,

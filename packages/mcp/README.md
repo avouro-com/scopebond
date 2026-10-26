@@ -34,6 +34,18 @@ scopebond-mcp --server filesystem --policy scopebond.policy.json --key scopebond
 through. A denial returns a JSON-RPC error to the client and is never sent
 upstream. Set `--receipts log.jsonl` to keep the signed receipts locally.
 
+Each call's tool name is checked against the upstream's own tool list: the last
+full list the client fetched, or one the proxy reads itself (again after a minute,
+or when a call names a tool the list lacks). An upstream that resolves tool names
+loosely (`Remove_Item`, a full-width form) could otherwise run a tool a rule
+denies by its exact name. A name that is not listed (`unlisted`), is another
+spelling of a listed tool (`spelling_variant`), is listed twice up to case or
+width (`ambiguous`), or cannot be checked because no tool list can be read
+(`no_list`) is recorded on the receipt's action as `tool_listing`. In enforce
+mode (a typed adapter in `enforce`, or without one a policy with a clause that is
+not `monitor`) the call is denied. In monitor mode (a typed adapter in `monitor`,
+or a policy whose clauses all monitor) it is forwarded with the finding recorded.
+
 A receipt never holds the tool's arguments, only `args_digest`: an HMAC-SHA-256
 (`hmac-sha256:…`) under a local key that never leaves the computer. The CLI uses the
 hook's per-machine digest key when `--observations-dir` names the hook's folder, and

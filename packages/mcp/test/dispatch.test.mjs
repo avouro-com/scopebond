@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { budgetDigest, defaultBudgetTemplate, deriveKid, requestHash, signDispatchApproval, StaticPrincipalKeyRegistry, scopeDigest } from "@scopebond/gateway";
 import { createDispatchGuard, DispatchStore } from "@scopebond/gateway/node";
 import { createMcpProxy } from "../dist/index.js";
+import { listed } from "./listed.mjs";
 
 const policy = { vocabulary_version: "1.0", policy_id: "mcp", version: 1, clauses: [{ id: "any", type: "action_allowlist", mode: "enforce", action_types: ["mcp.tool.call"] }] };
 const keyPem = () => generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" }).toString();
@@ -16,7 +17,7 @@ const SUBJECT = "client:c7";
 
 function setup(guardConfig, extra = {}) {
   const calls = [];
-  const upstream = { call: async (m) => { calls.push(m); return { jsonrpc: "2.0", id: m.id ?? null, result: { ok: true } }; } };
+  const upstream = listed({ call: async (m) => { calls.push(m); return { jsonrpc: "2.0", id: m.id ?? null, result: { ok: true } }; } }, ["deploy", "read_file"]);
   const guard = createDispatchGuard({ dbPath: join(dir(), "d.db"), ...guardConfig });
   const proxy = createMcpProxy({ policy, principal: { subject: SUBJECT, issuer: "scopebond:mcp-proxy" }, server: "ops", attesterKeyPem: keyPem(), upstream, dispatch: { guard, ...extra } });
   return { calls, guard, proxy };
@@ -40,7 +41,7 @@ test("an over-budget tools/call is answered with an error and never forwarded; a
 
 test("a tool error after dispatch still consumes its slot", async () => {
   const calls = [];
-  const upstream = { call: async (m) => { calls.push(m); return { jsonrpc: "2.0", id: m.id, result: { isError: true } }; } };
+  const upstream = listed({ call: async (m) => { calls.push(m); return { jsonrpc: "2.0", id: m.id, result: { isError: true } }; } }, ["deploy"]);
   const guard = createDispatchGuard({ dbPath: join(dir(), "d.db"), budgets: () => [budget(1)] });
   const proxy = createMcpProxy({ policy, principal: { subject: SUBJECT, issuer: "x" }, server: "ops", attesterKeyPem: keyPem(), upstream, dispatch: { guard } });
   await proxy.handle(call(1));
@@ -83,7 +84,7 @@ test("a delegated proxy is bounded by its delegation and refused when it is revo
   const now = Date.now();
   store.addDelegation({ delegation_id: "deleg:mcp-child-001", parent_id: null, actor: SUBJECT, scope, scope_digest: scopeDigest(scope), issued_at: new Date(now).toISOString(), expires_at: new Date(now + 3_600_000).toISOString() });
   const calls = [];
-  const upstream = { call: async (m) => { calls.push(m); return { jsonrpc: "2.0", id: m.id, result: { ok: true } }; } };
+  const upstream = listed({ call: async (m) => { calls.push(m); return { jsonrpc: "2.0", id: m.id, result: { ok: true } }; } }, ["deploy", "read_file"]);
   const guard = createDispatchGuard({ dbPath: path });
   const proxy = createMcpProxy({ policy, principal: { subject: SUBJECT, issuer: "x" }, server: "ops", attesterKeyPem: keyPem(), upstream, dispatch: { guard, delegationId: "deleg:mcp-child-001" } });
   assert.ok((await proxy.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "read_file", arguments: {} } })).result);
