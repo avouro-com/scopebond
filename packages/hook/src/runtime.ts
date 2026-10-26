@@ -31,6 +31,7 @@ import { containedDeletesSentence, withProgramScope, withRestorableScope } from 
 import { gitRestorable } from "./git-restore.js";
 import { DESTRUCTIVE_FORMS, DESTRUCTIVE_FORMS_SENTENCE } from "./destructive-forms.js";
 import type { IntelPlugin } from "./intel-plugin.js";
+import { UNKNOWN_TOOL_REASON, unknownToolReason } from "./unknown-tools.js";
 export { policyOptsIntoTargets, TARGET_RULES, TARGET_OPT_IN_TYPES } from "./target-rules.js";
 export type { TargetRule } from "./target-rules.js";
 
@@ -71,7 +72,8 @@ export interface RuntimeConfig {
    *  with the reason "session budget". Absent or null: no budget applies. */
   sessionBudgets?: SessionBudgetGuard | null;
   /** How this host handles a Safe Install "ask" (install-verdicts.ts): "ask", its own prompt asks the person; "deny" (the
-   *  default), it cannot ask, so the install is refused with the reason and how to go ahead. A "block" is always refused. */
+   *  default), it cannot ask, so the install is refused with the reason and how to go ahead. A "block" is always refused.
+   *  A host tool Scopebond does not know (unknown-tools.ts) is answered the same way: asked, or refused. */
   installAsk?: "ask" | "deny";
   /** Whether git can restore every target a delete outside the working folder names (git-restore.ts `gitRestorable`, the
    *  default): such a delete is recorded instead of blocked. Tests pass their own. */
@@ -89,7 +91,7 @@ export interface Decision {
   clauseId?: string | null;
   /** Why a deny was made, where a reason beyond the clause applies: `blocked_service` when the workspace blocks the MCP server,
    *  host, program or package the action names (service-rules.ts). */
-  code?: typeof BLOCKED_SERVICE_REASON | "install_verdict" | "session_budget" | "dispatch_refused";
+  code?: typeof BLOCKED_SERVICE_REASON | "install_verdict" | "session_budget" | "dispatch_refused" | typeof UNKNOWN_TOOL_REASON;
   /** The deciding receipt (the denied one, or the first allow). */
   receipt?: unknown;
   /** Every receipt produced — one per simple command in a decomposed shell call. */
@@ -577,6 +579,26 @@ export function createHookRuntime(config: RuntimeConfig) {
         const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization }, receiptOptions);
         return { decision: "ask", reason: check.message, receipt };
       }
+      // A host tool Scopebond has no mapping for and does not know to be harmless (unknown-tools.ts) is never let through
+      // unchecked: a host that can ask the person asks, any other refuses it, in every mode. A policy that names its
+      // `tool.<name>` type (rules.json `observe`) decides it below instead; strict mode, as before, sends it to the policy.
+      if (mapped.unknownTool === true && !config.strict && !named.has(mapped.intent.action_type)) {
+        const type = mapped.intent.action_type;
+        const allowHow = isManaged(policyDir)
+          ? "ask an admin of your Scopebond workspace to allow it"
+          : existsSync(join(policyDir, RULES_FILE))
+            ? `add "${type}" to "observe" in ${join(policyDir, RULES_FILE)}, then run \`${cliCommand("rules apply")}\``
+            : `add a clause for "${type}" to ${config.policyPath}`;
+        if ((config.installAsk ?? "deny") === "ask") {
+          const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization }, receiptOptions);
+          return { decision: "ask", reason: unknownToolReason(mapped.source, type, allowHow, null), code: UNKNOWN_TOOL_REASON, receipt };
+        }
+        boundaryVerdict = { allow: false, reason: "tool_unknown", detail: mapped.source, consumed_approvals: [], budgets: [] };
+        let refused;
+        try { refused = await gateway.handleAction({ intent: signed.intent, authorization: signed.authorization }, Object.keys(receiptOptions).length ? receiptOptions : undefined); }
+        finally { boundaryVerdict = null; }
+        return { decision: "deny", reason: unknownToolReason(mapped.source, type, allowHow, FINAL_INSTRUCTION.stays), clauseId: null, code: UNKNOWN_TOOL_REASON, receipt: refused.receipt };
+      }
       // A derived intent (the taxonomy action a shell command or MCP call performs, beside the call itself) is evaluated only
       // under a policy that opts in (it names a type Action Taxonomy 1.1 introduced) and that names its action type. Under any
       // other policy it is recorded, so a policy written for the 1.0 vocabulary decides every call exactly as it did before:
@@ -585,7 +607,7 @@ export function createHookRuntime(config: RuntimeConfig) {
       // mode does not change this: the call's own intent is still evaluated.
       const derivedRecorded = mapped.derived === true && (!optedIn || !mapped.evaluated || !named.has(mapped.intent.action_type));
       // A command that only prints its help or version, or rehearses, changes nothing: recorded, in every mode.
-      if ((!mapped.evaluated && !config.strict) || derivedRecorded || mapped.describesOnly === true) {
+      if ((!mapped.evaluated && !config.strict && mapped.unknownTool !== true) || derivedRecorded || mapped.describesOnly === true) {
         // Unknown tool or unparseable command, non-strict: observe without
         // evaluating — grants nothing.
         const { receipt } = await gateway.observeAction({ intent: signed.intent, authorization: signed.authorization }, receiptOptions);

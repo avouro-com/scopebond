@@ -294,7 +294,7 @@ add({ rule: "R09", agent: "copilot", dialect: "posix", input: copilot("bash", { 
 add({ rule: "R09", agent: "copilot", dialect: "powershell", input: copilot("powershell", { command: "Get-ChildItem" }, WIN), expect: "allow", catalog: [] });
 add({ rule: "R10", agent: "copilot", dialect: "posix", input: copilot("bash", { command: "eval $CMD" }), expect: "deny", catalog: [], unknown: true });
 add({ rule: "I05", agent: "copilot", dialect: "posix", input: copilot("web_fetch", { url: "https://example.test/docs?token=abc" }), expect: "allow", catalog: [], cell: { action_type: "net.fetch", role: "allow" } });
-// A tool Scopebond has no mapping for is recorded and not evaluated (strict mode denies it).
+// A known-safe tool Scopebond has no mapping for (a sub-agent task) is recorded and not evaluated (strict mode denies it).
 add({ rule: "I05", agent: "copilot", dialect: "posix", input: copilot("task", { prompt: "x" }), expect: "allow", catalog: [] });
 
 export const VECTORS: readonly Vector[] = out;

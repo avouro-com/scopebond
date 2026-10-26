@@ -267,18 +267,24 @@ test("a routine read is allowed silently, so Copilot's own permission flow stays
   assert.equal(read.result, "allow");
 });
 
-test("an unknown tool is recorded as not evaluated", () => {
+test("an unknown tool is asked about (the cloud agent: denied), never let through unchecked", () => {
   const mapped = mapCopilotToolUse({ tool_name: "some_future_tool", tool_input: { x: 1 }, cwd: "/w" });
   assert.equal(mapped.length, 1);
   assert.equal(mapped[0].intent.action_type, "tool.some_future_tool");
   assert.equal(mapped[0].evaluated, false);
   const g = governed("enforce");
   const r = g.decide("some_future_tool", { x: 1 });
-  assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.stdout, "");
+  const answer = JSON.parse(r.stdout);
+  // The Copilot CLI asks the person; where the hook reads as the cloud agent (no one to ask), the ask is a deny.
+  const cloud = r.status === 2;
+  assert.equal(answer.permissionDecision, cloud ? "deny" : "ask", r.stderr);
+  assert.match(answer.permissionDecisionReason, /the tool "some_future_tool"/);
   const rec = receipts(g.dir).find((x) => x.payload.intent?.action_type === "tool.some_future_tool");
   assert.ok(rec, "recorded");
-  assert.equal(rec.payload.execution?.state, "observed_not_evaluated");
+  // A known-safe Copilot tool is still recorded and left to Copilot.
+  const safe = g.decide("read_bash", { sessionId: "1" });
+  assert.equal(safe.status, 0, safe.stderr);
+  assert.equal(safe.stdout, "");
 });
 
 test("Copilot's tool names map to the Claude Code tool families", () => {
