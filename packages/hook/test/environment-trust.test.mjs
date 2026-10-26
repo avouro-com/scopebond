@@ -22,7 +22,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   scaffold, mapClaudeToolUse, createHookRuntime, trustProjectPolicy, userHome, engineHome, homeFolders, policyKeys, packEngineLevel,
-  setting, settingsEnv, commandLineSettings, withoutSettingArgs, ignoredSettings, accountHome, codeLoadingVariables, MANAGED_DOC_FILE, digestRules,
+  setting, settingsEnv, commandLineSettings, withoutSettingArgs, ignoredSettings, accountHome, codeLoadingVariables, codeLoadingNodeOptions, nodeOptionWords,
+  MANAGED_DOC_FILE, digestRules,
 } from "../dist/index.js";
 import { actionKey } from "../dist/override.js";
 
@@ -124,10 +125,19 @@ test("a hook call refuses to decide while NODE_OPTIONS or NODE_PATH is set; doct
     const base = cleanEnv(profile, { SCOPEBOND_HOME: home });
     assert.equal(claude(base, root, [], "ls").decision, "allow", "without them, an ordinary action is allowed");
 
-    const withOptions = claude({ ...base, NODE_OPTIONS: "--max-old-space-size=512" }, root, [], "ls");
+    // Memory and diagnostics flags do not block.
+    const harmless = claude({ ...base, NODE_OPTIONS: "--max-old-space-size=512 --no-warnings --enable-source-maps" }, root, [], "ls");
+    assert.equal(harmless.decision, "allow", harmless.r.stderr);
+    assert.equal(harmless.r.status, 0);
+
+    // A preload does (this one is an empty file, so nothing else changes).
+    const preload = join(root, "empty-preload.cjs");
+    writeFileSync(preload, "");
+    const preloadOption = `--max-old-space-size=512 --require "${preload.replace(/\\/g, "\\\\")}"`;
+    const withOptions = claude({ ...base, NODE_OPTIONS: preloadOption }, root, [], "ls");
     assert.equal(withOptions.decision, "deny");
     assert.equal(withOptions.r.status, 2);
-    assert.match(withOptions.reason, /NODE_OPTIONS/);
+    assert.match(withOptions.reason, /NODE_OPTIONS \(--require\)/);
     assert.match(withOptions.reason, /Remove it/);
 
     const cursor = spawnSync(process.execPath, [cli, "cursor"], {
@@ -138,17 +148,44 @@ test("a hook call refuses to decide while NODE_OPTIONS or NODE_PATH is set; doct
     assert.equal(answer.permission, "deny");
     assert.match(answer.agentMessage, /NODE_PATH/);
 
-    const env = { ...base, NODE_OPTIONS: "--max-old-space-size=512", NODE_PATH: root };
+    const env = { ...base, NODE_OPTIONS: preloadOption, NODE_PATH: root };
     const doctor = spawnSync(process.execPath, [cli, "doctor", "--json"], { encoding: "utf8", env, cwd: root, timeout: 120_000 });
     const report = JSON.parse(doctor.stdout);
     const check = report.checks.find((c) => c.name === "environment");
     assert.equal(check.ok, false);
-    assert.match(check.detail, /NODE_OPTIONS, NODE_PATH/);
+    assert.match(check.detail, /NODE_OPTIONS \(--require\), NODE_PATH/);
     assert.match(check.fix, /remove them/);
     const status = spawnSync(process.execPath, [cli, "status", "--json"], { encoding: "utf8", env, cwd: root, timeout: 120_000 });
     assert.ok(JSON.parse(status.stdout), status.stderr);
     assert.deepEqual(codeLoadingVariables({ NODE_OPTIONS: " ", NODE_PATH: "" }), [], "blank values load nothing");
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("NODE_OPTIONS blocks for each flag that loads or changes code, and for a value that cannot be read; not for memory or diagnostics flags", () => {
+  for (const option of [
+    "--require /tmp/x.js", "--require=/tmp/x.js", "-r /tmp/x.js", "--import=data:text/javascript,0", "--loader ./l.mjs",
+    "--experimental-loader=./l.mjs", "--experimental_loader ./l.mjs", "--inspect", "--inspect-brk=9229", "--inspect-port=0",
+    "--inspect-wait", "--debug-port=1", "--experimental-policy=p.json", "--policy-integrity=sha384-x", "--disable-proto=delete",
+    "--disable-wasm-trap-handler", "--expose-gc", "--expose_internals", "--eval 1", "-e 1", "--print 1", "-p 1",
+    "--openssl-config=/tmp/o.cnf", "--env-file=.env", "--env-file-if-exists=.env",
+    "--max-old-space-size=4096 --require=/tmp/x.js", `--no-warnings "--require" "/tmp/a b.js"`,
+  ]) {
+    assert.notDeepEqual(codeLoadingNodeOptions(option), [], option);
+    assert.deepEqual(codeLoadingVariables({ NODE_OPTIONS: option }), ["NODE_OPTIONS"], option);
+  }
+  for (const option of [`--require "/tmp/open`, `--no-warnings '--import`]) {
+    assert.deepEqual(codeLoadingNodeOptions(option), ["(unreadable)"], `an open quote: ${option}`);
+  }
+  for (const option of [
+    "--max-old-space-size=4096", "--max_old_space_size=4096", "--max-semi-space-size=64", "--stack-size=2000", "--no-warnings",
+    "--trace-warnings", "--enable-source-maps", "--dns-result-order=ipv4first",
+    `--max-old-space-size=4096 --no-warnings --trace-warnings --enable-source-maps --dns-result-order=verbatim`, `"--no-warnings"`,
+  ]) {
+    assert.deepEqual(codeLoadingNodeOptions(option), [], option);
+    assert.deepEqual(codeLoadingVariables({ NODE_OPTIONS: option }), [], option);
+  }
+  assert.deepEqual(nodeOptionWords(`--a "b c" 'd e' f\\ g "h\\"i"`), ["--a", "b c", "d e", "f\\", "g", 'h"i']);
+  assert.deepEqual(codeLoadingVariables({ NODE_PATH: "/x" }), ["NODE_PATH"], "NODE_PATH always blocks");
 });
 
 // ---- 3. the home folder is the operating system account's ----------------------------------------------------------------

@@ -91,7 +91,7 @@ import type { Pack } from "@scopebond/policy-schema/pack";
 import { describePackSync } from "./pack-sync.js";
 import { approvedWorkspaceId, machineIdField, machineIdFor } from "./machine-id.js";
 import { HOT_PATH_STORE_BUSY_MS, WAIT_RESERVE_MS, hookDeadlineRemainingMs, refuseHookCall, waitWithinDeadline } from "./hook-deadline.js";
-import { accountHome, codeLoadingVariables, ignoredSettings, movedHome, takeSettingArgs } from "./env-trust.js";
+import { accountHome, describeCodeLoading, ignoredSettings, movedHome, takeSettingArgs } from "./env-trust.js";
 import { policyKeyProblems } from "./policy-keys.js";
 import { recordDeliveryAttempt, recordRulesCredential } from "./delivery-state.js";
 import { describeDelivery, flushOutcome } from "./delivery-report.js";
@@ -2119,7 +2119,7 @@ async function runDoctor(args: string[] = []): Promise<void> {
   check("cli", existsSync(cli), cli);
   // The environment a hook call runs in: Node's code-loading variables block every hook call, the home folder is the
   // operating system account's, and a signed build reads its settings from the hook's command line only.
-  const loaders = codeLoadingVariables();
+  const loaders = describeCodeLoading();
   log(`  environment      ${loaders.length ? `${loaders.join(", ")} SET — every tool call is blocked while ${loaders.length > 1 ? "they are" : "it is"} set` : "ok"}`);
   check("environment", loaders.length === 0, loaders.length ? loaders.join(", ") : "no code-loading variable");
   if (loaders.length) problem("environment", `${loaders.join(" and ")} ${loaders.length > 1 ? "are" : "is"} set: ${loaders.length > 1 ? "they" : "it"} can load other code into the hook, so it blocks every tool call; remove ${loaders.length > 1 ? "them" : "it"} from the environment your coding tool starts in, then start the tool again`);
@@ -2756,11 +2756,11 @@ function nodeSupported(version = process.versions.node): boolean {
 
 /** Why a hook call refuses to decide while Node's code-loading variables are set, or null when none is. */
 function codeLoadingRefusal(env: NodeJS.ProcessEnv = process.env): string | null {
-  const names = codeLoadingVariables(env);
+  const names = describeCodeLoading(env);
   if (!names.length) return null;
   const which = names.join(" and ");
   const them = names.length > 1 ? "them" : "it";
-  return `Scopebond: ${which} ${names.length > 1 ? "are" : "is"} set in this coding tool's environment, and ${names.length > 1 ? "they" : "it"} can load other code into the program that checks each action, so this action is blocked. Remove ${them} from the environment the coding tool starts in (a shell startup file, a variable set for every session, the tool's own settings), start the tool again, then run the Scopebond doctor command.`;
+  return `Scopebond: ${which} ${names.length > 1 ? "are" : "is"} set in this coding tool's environment, and ${names.length > 1 ? "they" : "it"} can load or change code in the program that checks each action, so this action is blocked. Remove ${them} from the environment the coding tool starts in (a shell startup file, a variable set for every session, the tool's own settings), start the tool again, then run the Scopebond doctor command.`;
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {

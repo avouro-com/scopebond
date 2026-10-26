@@ -195,7 +195,7 @@ names, in any case and in their `%…%`, `$env:…` and short-name spellings; an
 It also covers the shell startup files (`.zshrc`, `.bashrc`, `.profile`, `.zshenv`, fish and PowerShell profiles,
 `/etc/profile.d`, `environment.d`), wherever they sit, since a line added there runs in every later session; edit
 those yourself. Setting `SCOPEBOND_HOME`, `SCOPEBOND_HOOK_DIR`, `SCOPEBOND_POLICY_KEYS_JSON`, `SCOPEBOND_PACK_ENGINE_LEVEL`,
-a `SCOPEBOND_POLICY_SYNC` setting, `NODE_OPTIONS`, `NODE_PATH` or a coding agent's config folder for every later
+a `SCOPEBOND_POLICY_SYNC` setting, `NODE_OPTIONS` (any value), `NODE_PATH` or a coding agent's config folder for every later
 session (`setx`, `launchctl setenv`), or when starting a coding agent, counts as switching Scopebond off, and once your
 own install exists a hook call follows `SCOPEBOND_HOOK_DIR` only to that install or to a project folder you trusted.
 Even then, allowances and workspace rules documents are read from your own install, never from the project folder. A project set up by an earlier version, whose rules were never
@@ -1002,9 +1002,13 @@ Set `SCOPEBOND_POLICY_SYNC=off` to stop the five-minute check (the rules in forc
   signed engine bundle it loads) reads them only from its hook command, written after the command as
   `--setting NAME=VALUE`; in the environment they are ignored, and `doctor` lists them as not used.
   `SCOPEBOND_AS_SIGNED_BUILD=1` reads them the signed way on any install.
-- **Node's code-loading variables.** While `NODE_OPTIONS` or `NODE_PATH` is set, a hook call blocks the action and says
-  why: both can load other code into the program that decides. `doctor`, `status` and the other commands still run, and
-  `doctor` names the variable as a problem.
+- **Node's code-loading variables.** A hook call blocks the action and says why while `NODE_PATH` is set, or while
+  `NODE_OPTIONS` carries a flag that loads or changes code in the program that decides: `--require`/`-r`, `--import`,
+  `--loader`/`--experimental-loader`, `--inspect…`/`--debug…`, `--experimental-policy`, `--policy-integrity`,
+  `--disable-…`, `--expose…`, `--eval`/`-e`, `--print`/`-p`, `--openssl-config` or `--env-file…` (a value whose quotes do
+  not close counts too). Memory and diagnostics flags such as `--max-old-space-size`, `--max-semi-space-size`,
+  `--stack-size`, `--no-warnings`, `--trace-warnings`, `--enable-source-maps` and `--dns-result-order` do not block.
+  `doctor`, `status` and the other commands still run, and `doctor` names the variable and flag as a problem.
 - **The home folder.** Scopebond's own folder, and the home folder its rules mean by `~`, come from the operating system
   account (`os.userInfo().homedir`), not from `HOME` or `USERPROFILE`. When those name another folder, the account's
   wins and `doctor` says so.
