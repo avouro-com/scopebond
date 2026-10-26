@@ -37,6 +37,8 @@ const MAPPERS = {
 const CASES = [
   { harness: "claude", safe: ["TodoWrite", { todos: [] }], mapped: ["Read", { file_path: "src/a.ts" }] },
   { harness: "claude", safe: ["AskUserQuestion", { questions: [] }], mapped: ["Glob", { pattern: "**/*.ts" }] },
+  { harness: "claude", safe: ["Skill", { skill: "release-notes" }], mapped: ["Read", { file_path: "src/a.ts" }] },
+  { harness: "copilot", safe: ["Skill", { skill: "release-notes" }], mapped: ["view", { path: "src/a.ts" }] },
   { harness: "codex", safe: ["update_plan", { plan: [] }], mapped: ["Bash", { command: "ls -la" }] },
   { harness: "copilot", safe: ["read_bash", { sessionId: "1" }], mapped: ["view", { path: "src/a.ts" }] },
   { harness: "copilot", safe: ["task", { prompt: "look around" }], mapped: ["bash", { command: "ls -la" }] },
@@ -95,6 +97,19 @@ for (const mode of ["monitor", "enforce"]) {
   }
 }
 
+test("SlashCommand and the MCP resource tools are not known-safe: refused like any unknown tool", async () => {
+  for (const name of ["SlashCommand", "ListMcpResourcesTool", "ReadMcpResourceTool"]) {
+    for (const harness of ["claude", "copilot"]) {
+      const { dir } = setup();
+      const actions = MAPPERS[harness](name, {}, dir);
+      assert.equal(actions[0].unknownTool, true, `${harness} ${name}`);
+      const d = await runtime(dir).evaluate(actions);
+      assert.equal(d.decision, "deny", `${harness} ${name}`);
+      assert.equal(d.code, "unknown_tool");
+    }
+  }
+});
+
 test("a tool the policy names (rules.json observe) is decided by the policy, not refused", async () => {
   const { dir, agentKid, rulesPath } = setup();
   const rules = JSON.parse(readFileSync(rulesPath, "utf8"));
@@ -150,6 +165,10 @@ test("Claude Code: a made-up tool is asked about in a prompting mode and denied 
   const safe = hook(["claude"], dir, { ...base, tool_name: "TodoWrite", tool_input: { todos: [] }, permission_mode: "bypassPermissions" });
   assert.equal(safe.status, 0, safe.stderr);
   assert.equal(safe.stdout, "");
+  // A skill only loads instructions: it is not blocked in bypass mode.
+  const skill = hook(["claude"], dir, { ...base, tool_name: "Skill", tool_input: { skill: "release-notes" }, permission_mode: "bypassPermissions" });
+  assert.equal(skill.status, 0, skill.stderr);
+  assert.equal(skill.stdout, "");
 });
 
 test("Codex: a made-up tool is denied (Codex cannot ask)", () => {

@@ -18,11 +18,13 @@
  *    stop one.
  *  - `Task`, `Agent`: start a sub-agent of the same host. Each tool the sub-agent uses is its own tool call, sent to the same
  *    hook entries; `capabilities` still lists nested orchestration as not covered, as before.
- *  Not on the list: `Skill` and `SlashCommand` (a skill or command file can run shell commands the host runs itself),
- *  `ListMcpResourcesTool` and `ReadMcpResourceTool` (they reach an MCP server outside the MCP rules), and every other name. */
+ *  - `Skill`: loads a skill's instructions into the conversation. A command or edit it leads to is its own tool call
+ *    (Bash, Edit, ...), checked by this hook.
+ *  Not on the list: `SlashCommand` (a command file can run shell commands the host runs itself), `ListMcpResourcesTool`
+ *  and `ReadMcpResourceTool` (they reach an MCP server outside the MCP rules), and every other name. */
 export const CLAUDE_SAFE_TOOLS: ReadonlySet<string> = new Set([
   "TodoWrite", "TodoRead", "EnterPlanMode", "ExitPlanMode", "AskUserQuestion", "WebSearch", "ToolSearch",
-  "BashOutput", "TaskOutput", "KillShell", "KillBash", "TaskStop", "Task", "Agent",
+  "BashOutput", "TaskOutput", "KillShell", "KillBash", "TaskStop", "Task", "Agent", "Skill",
 ]);
 
 /** GitHub Copilot: the Claude Code names above, and Copilot's own names that map to none of them.

@@ -1269,8 +1269,9 @@ action (`shell.exec`, `git.push`, `file.write`, `mcp.tool.call`, …), signed by
 machine key and decided against your policy by an in-process check-only gateway.
 An allowed action is recorded and the agent proceeds. A denied action is blocked.
 A tool Scopebond has no mapping for is let through unchecked only when it is known to be
-harmless: it only reads, or only drives the agent's own task list, plan or question to you
-(Claude Code's `TodoWrite`, `AskUserQuestion`, `WebSearch` or `Task`, Codex's `update_plan`;
+harmless: it only reads, only loads a skill's instructions (what the skill leads to is checked
+as its own tool calls), or only drives the agent's own task list, plan or question to you
+(Claude Code's `TodoWrite`, `AskUserQuestion`, `WebSearch`, `Task` or `Skill`, Codex's `update_plan`;
 the lists are in `src/unknown-tools.ts`). Such a tool is recorded as *not evaluated* and left
 to the coding agent's own permission prompt. Any other tool is blocked, in every mode, with a
 reason naming it; where the coding agent can ask you (Claude Code in a mode that prompts,
