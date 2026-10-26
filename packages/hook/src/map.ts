@@ -22,6 +22,7 @@ import { packagesToCheck } from "./typed-ops.js";
 import { deriveInstalls, deriveSettingsInstalls, MCP_SETTINGS_FILE } from "./typed-install.js";
 import { deleteVerdicts, programScope, type DeleteVerdict } from "./delete-scope.js";
 import { destructiveForm } from "./destructive-forms.js";
+import { CLAUDE_SAFE_TOOLS, CODEX_SAFE_TOOLS, COPILOT_SAFE_TOOLS, CURSOR_SAFE_EVENTS } from "./unknown-tools.js";
 
 export interface NormalizedIntent {
   action_type: string;
@@ -63,6 +64,9 @@ export interface Mapped {
   /** On a `software.install` intent Safe Install checked (install-verdicts.ts): its verdict and the message for it. Not part of
    *  the signed intent (the intent carries the verdict and its reason codes); the runtime reads it to block, ask or go on. */
   install?: { verdict: "block" | "ask" | "allow"; reasons: Array<{ code: string; text: string }>; source: string; message: string };
+  /** On a host tool Scopebond has no mapping for and does not know to be harmless (unknown-tools.ts): the runtime denies it,
+   *  or asks the person where the host can ask, unless the policy names its `tool.<name>` type. Not part of the signed intent. */
+  unknownTool?: true;
   /** On a shell command's own `shell.exec`: what a person is shown when a rule they may act on blocks it, and all an
    *  allowance for it is keyed on (override.ts), worked out only when asked for. Not part of the signed intent. */
   shown?: () => ShownCommand;
@@ -1876,6 +1880,11 @@ function mapApplyPatch(command: string, cwd?: string): Mapped[] {
 
 const one = (intent: NormalizedIntent, evaluated: boolean, source: string): Mapped[] => [{ intent, evaluated, source }];
 
+/** A host tool with no mapping: `tool.<name>`, not evaluated. A name on the harness's known-safe list (unknown-tools.ts) is
+ *  recorded as before; any other is marked `unknownTool`, which the runtime does not let through unchecked. */
+const unmapped = (name: string, safe: ReadonlySet<string>): Mapped[] =>
+  [{ intent: { action_type: `tool.${name.toLowerCase()}`, params: {} }, evaluated: false, source: name, ...(safe.has(name) ? {} : { unknownTool: true as const }) }];
+
 /** An MCP tool call: the `mcp.tool.call` intent it always was, then the taxonomy actions the server's tool performs as a rule
  *  pack's MCP profile describes it (packs.ts). A path on this computer (a `filesystem` server's) is resolved against the working folder like any
  *  other. A file written through the GitHub API (`via: "github"`) is in a remote repository, not on this computer: its path
@@ -2008,12 +2017,12 @@ function mapClaudeToolUseRaw(input: Record<string, unknown>): Mapped[] {
   }
   const mcp = parseMcpName(name);
   if (mcp) return mapMcpCall(mcp.server, mcp.tool, ti, cwd, name);
-  return one({ action_type: `tool.${name.toLowerCase()}`, params: {} }, false, name);
+  return unmapped(name, CLAUDE_SAFE_TOOLS);
 }
 
 /** Map an OpenAI Codex PreToolUse payload. Codex reports shell and unified-exec
  *  calls as `Bash`, file patches as `apply_patch`, and MCP calls by their native
- *  `mcp__server__tool` name. Other local tools remain visible but unevaluated. */
+ *  `mcp__server__tool` name. Other local tools are `tool.<name>`, not evaluated (unknown-tools.ts). */
 function mapCodexToolUseRaw(input: Record<string, unknown>): Mapped[] {
   const name = textOf(input?.tool_name);
   const ti = (input?.tool_input ?? {}) as Record<string, unknown>;
@@ -2024,15 +2033,18 @@ function mapCodexToolUseRaw(input: Record<string, unknown>): Mapped[] {
     return mapShell(textOf(ti.command ?? ti.cmd), cwd);
   if (name === "apply_patch" || name === "Edit" || name === "Write")
     return mapApplyPatch(textOf(ti.command ?? ti.patch), cwd);
+  // `view_image` shows the agent an image file: a read of that file, checked like any other.
+  if (name === "view_image")
+    return pathIntents("file.read", rel(ti.path, cwd), name);
   const mcp = parseMcpName(name);
   if (mcp) return mapMcpCall(mcp.server, mcp.tool, ti, cwd, name);
-  return one({ action_type: `tool.${name.toLowerCase()}`, params: {} }, false, name);
+  return unmapped(name, CODEX_SAFE_TOOLS);
 }
 
 /** GitHub Copilot's own tool names, and the Claude Code tool each one stands for. With the PascalCase event names
  *  Scopebond registers, Copilot already reports the Claude name (`Bash`, `Read`, `Write`, `Edit`, ...) in `tool_name`;
  *  the camelCase form (`toolName`) carries the runtime name, translated here. Source: the GitHub Copilot hooks reference,
- *  "Tool names" and the runtime-to-Claude name table. A name not listed keeps its own name and is recorded unevaluated. */
+ *  "Tool names" and the runtime-to-Claude name table. A name not listed keeps its own name (unknown-tools.ts). */
 const COPILOT_TOOLS: Readonly<Record<string, string>> = {
   bash: "Bash", powershell: "PowerShell", view: "Read", create: "Write", edit: "Edit", str_replace_editor: "Edit",
   apply_patch: "Edit", grep: "Grep", rg: "Grep", glob: "Glob", web_fetch: "WebFetch", web_search: "WebSearch",
@@ -2112,12 +2124,13 @@ export function mapCopilotCall(call: Record<string, unknown>): Mapped[] {
   if (call?.tool_name === "Edit" && ti.file_path === undefined && typeof ti.patch === "string") {
     return withHookSwitchGuard(withSettingsInstalls(mapApplyPatch(ti.patch, call.cwd ? textOf(call.cwd) : undefined), ti, "apply_patch"), ti, "apply_patch");
   }
-  return mapClaudeToolUse(call);
+  // Copilot's own harmless tools (`read_bash`, ...) are known beside Claude Code's.
+  return mapClaudeToolUse(call).map((m) => (m.unknownTool && COPILOT_SAFE_TOOLS.has(m.source) ? { intent: m.intent, evaluated: m.evaluated, source: m.source } : m));
 }
 
 /** Map a GitHub Copilot `PreToolUse` payload (CLI, VS Code agent mode or the cloud coding agent) to the normalized
  *  actions it represents: each Copilot tool is translated into the Claude Code tool family it belongs to and mapped
- *  exactly as a Claude Code call is. A tool with no mapping stays `tool.<name>`, recorded and not evaluated. */
+ *  exactly as a Claude Code call is. A tool with no mapping stays `tool.<name>`, not evaluated (unknown-tools.ts). */
 export function mapCopilotToolUse(input: Record<string, unknown>): Mapped[] {
   return mapCopilotCall(copilotAsClaude(input));
 }
@@ -2156,6 +2169,6 @@ export function mapCursorEvent(event: string, payload: Record<string, unknown>):
       return mapMcpCall(server, tool, args, cwd ?? roots[0], event, raw, hint);
     }
     default:
-      return one({ action_type: `tool.${event.toLowerCase()}`, params: {} }, false, event);
+      return unmapped(event, CURSOR_SAFE_EVENTS);
   }
 }

@@ -320,7 +320,9 @@ export type DispatchReason =
   | "delegation_expired" | "delegation_out_of_scope" | "delegation_wrong_actor" | "budget_exceeded" | "budget_unacknowledged"
   | "budget_expired" | "budget_revoked" | "budget_capability_unsupported" | "clock_rollback" | "counter_unavailable"
   // An install a verdict service refused (the hook's Safe Install check): blocked, or held for a person the host cannot ask.
-  | "install_refused";
+  | "install_refused"
+  // A host tool the hook has no mapping for and does not know to be harmless.
+  | "tool_unknown";
 
 export interface BudgetObservation {
   budget_id: string;

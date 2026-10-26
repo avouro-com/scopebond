@@ -474,7 +474,8 @@ timeout. A hook Copilot never starts at all is outside what the hook can see.
 | `view` (`Read`), `grep`, `glob` | `file.read` | checked |
 | `create` (`Write`), `edit`, `str_replace_editor`, `apply_patch` (`Edit`) | `file.write` | checked |
 | `web_fetch` (`WebFetch`) | `net.fetch` | recorded (observed by default) |
-| MCP tools, `task`, `web_search`, anything else | `tool.<name>` | recorded, not evaluated (strict mode denies) |
+| `task` (`Agent`), `web_search`, `ask_user`, `update_todo`, `report_intent`, `fetch_copilot_cli_documentation` | `tool.<name>` | recorded, not evaluated (strict mode denies) |
+| MCP tools, anything else | `tool.<name>` | asked: the CLI asks you first (the cloud agent denies it) |
 
 The tool names are those in GitHub's Copilot hooks reference. Under the PascalCase events
 Copilot reports both shells as `Bash`; on Windows its shell is PowerShell, so a Windows
@@ -505,7 +506,7 @@ pages, read 2026-10-13.
   PascalCase entries. `Stop` only marks the session active; it prints nothing, so it never
   blocks or prolongs a turn. Because the Local harness's tool names are not published, a
   Local call is mapped only where its name is one Scopebond knows; any other name is recorded
-  as `tool.<name>`, not evaluated, and never answered "allow" (strict mode,
+  as `tool.<name>` and answered "ask", never "allow" (strict mode,
   `SCOPEBOND_HOOK_STRICT=1`, denies it). `install --copilot` writes the user-level file both
   the CLI and VS Code read.
 - **Known gaps in VS Code's Local harness** (from its reference; not yet checked live):
@@ -1267,9 +1268,16 @@ Each tool call is mapped to a normalized [Action Taxonomy](https://github.com/av
 action (`shell.exec`, `git.push`, `file.write`, `mcp.tool.call`, …), signed by the
 machine key and decided against your policy by an in-process check-only gateway.
 An allowed action is recorded and the agent proceeds. A denied action is blocked.
-Unknown tools are recorded as *not evaluated* and grant nothing — they fall through to
-the coding agent's own permission prompt, so the hook never turns an unrecognised
-action into an approval. Anything unexpected fails closed (deny) with a repair message.
+A tool Scopebond has no mapping for is let through unchecked only when it is known to be
+harmless: it only reads, or only drives the agent's own task list, plan or question to you
+(Claude Code's `TodoWrite`, `AskUserQuestion`, `WebSearch` or `Task`, Codex's `update_plan`;
+the lists are in `src/unknown-tools.ts`). Such a tool is recorded as *not evaluated* and left
+to the coding agent's own permission prompt. Any other tool is blocked, in every mode, with a
+reason naming it; where the coding agent can ask you (Claude Code in a mode that prompts,
+Cursor, the Copilot CLI), you are asked instead. To allow a tool, add its `tool.<name>` type
+(`tool.brandnewtool` for `BrandNewTool`) to `observe` in `.scopebond/rules.json` and run
+`scopebond rules apply`; the policy then decides it. Anything unexpected fails closed (deny)
+with a repair message.
 So does a call that has not decided shortly before the coding agent's own hook time limit
 (55 seconds for Claude Code, 45 for GitHub Copilot, 28 for Codex and Cursor), since an agent
 runs an action unchecked when its hook times out; `SCOPEBOND_HOOK_DEADLINE_MS` can only
@@ -1493,8 +1501,9 @@ gateway or in a sandbox; the hook is a guardrail for a cooperating agent, not a 
 **Strict mode.** A shell command that cannot be parsed (an unbalanced quote) or whose
 program is only known at run time (`$cmd`, `$(…) args`) is checked with an empty
 program name, which the starter policy denies in every mode — edit the `safe-shell`
-clause to change that. By default a tool with no taxonomy mapping, or a write whose
-target the command text does not name, is recorded *not evaluated* (not blocked). Add
+clause to change that. By default a known-harmless tool with no taxonomy mapping, or a
+write whose target the command text does not name, is recorded *not evaluated* (not
+blocked); any other unmapped tool is blocked or asked about (see "How it works"). Add
 `--strict` (or `SCOPEBOND_HOOK_STRICT=1`) to deny those too — fail-closed coverage for
 anything the taxonomy does not map.
 

@@ -130,15 +130,16 @@ test("a published-shape Stop prints nothing and exits 0: never blocks, never for
 
 // --- VS Code Local harness ---------------------------------------------------------------------------------------------
 
-test("a Local tool name nobody has published is recorded as tool.<name> and never allowed by Scopebond", () => {
+test("a Local tool name nobody has published is recorded as tool.<name> and asked about, never allowed by Scopebond", () => {
   const mapped = mapCopilotToolUse(localPreToolUse("/w", "localToolName", { anything: 1 }));
   assert.equal(mapped.length, 1);
   assert.equal(mapped[0].intent.action_type, "tool.localtoolname");
   assert.equal(mapped[0].evaluated, false);
   const g = governed("enforce");
   const r = g.hook(localPreToolUse(g.project, "localToolName", { anything: 1 }));
-  assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.stdout, "", "no permissionDecision allow: the surface's own approval flow stays in charge");
+  // Asked in Local's shape (where the hook reads as the cloud agent, the ask is a deny with exit 2): never let through.
+  const decision = JSON.parse(r.stdout).hookSpecificOutput.permissionDecision;
+  assert.equal(decision, r.status === 2 ? "deny" : "ask", r.stderr);
   // Strict mode denies an unmapped tool, in the shape the Local harness reads.
   const strict = g.hook(localPreToolUse(g.project, "localToolName", { anything: 1 }), { ...g.env, SCOPEBOND_HOOK_STRICT: "1" });
   assert.equal(strict.status, 2, strict.stdout);
