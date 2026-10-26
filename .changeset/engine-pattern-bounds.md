@@ -28,3 +28,7 @@ Bound the time pattern checks and the hook's deadline can take, whatever value a
   (starter and always-on rules, your own lists, a workspace's lists, exclusions, exceptions, allowed sites with wildcards,
   blocked services and rule-pack clauses) passes the check; a name exception written with stars next to each other
   (`a**`) is now compiled as one wildcard.
+
+Upgrading: a policy file you wrote by hand that contains a pattern of one of these shapes is now invalid, and the hook
+denies every call until it is rewritten (the error names the clause, the field and the reason). Patterns of the shapes the
+hook builds itself, and every shipped rule, are unaffected. Run `scopebond-hook test "git status"` after upgrading: it reports an invalid policy file and why.
