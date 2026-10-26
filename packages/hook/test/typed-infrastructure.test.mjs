@@ -449,7 +449,7 @@ test("end to end: with the rule on, the hook denies a remote DROP before it runs
   const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
   const dir = mkdtempSync(join(tmpdir(), "sb-guard-"));
   scaffold(dir, ENFORCE);
-  const env = { ...process.env, SCOPEBOND_HOOK_DIR: dir, HOME: dir, USERPROFILE: dir };
+  const env = { ...process.env, SCOPEBOND_HOOK_DIR: dir, HOME: dir, USERPROFILE: dir, SCOPEBOND_HOME: join(dir, ".scopebond") };
   const run = (args, input) => spawnSync(process.execPath, [cli, ...args], { input, encoding: "utf8", env, cwd: dir, timeout: 60000 });
   const bash = (command) => JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd: dir });
   const drop = 'wrangler d1 execute prod-db --remote --command "DROP TABLE users"';

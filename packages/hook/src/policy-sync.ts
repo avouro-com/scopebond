@@ -121,6 +121,7 @@ import { trimEndChars } from "./text.js";
 import { EXCEPTIONS_CAPABILITY } from "./rule-exceptions.js";
 import { QUIET_PATTERNS_CAPABILITY } from "./tune-digest.js";
 import { SIGNED_ARTIFACTS_CAPABILITY, syncArtifacts } from "./signed-artifacts.js";
+import { setting } from "./env-trust.js";
 
 /** What this hook reads in a workspace's rules document beyond what its version implies, as `x-scopebond-hook-capabilities`
  *  says it: allowances (and "Block, person may ask"), session budgets, blocked services (service-rules.ts), the one length an
@@ -468,9 +469,9 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
  *  `budgetMs`. Resolves `null` when no check was due, another one is running, or the cap was reached first (the check then
  *  finishes if the process lives long enough, else runs again on a later call). Never throws. `makeOptions` is called only when a
  *  check is due, so an ordinary call pays nothing but two file reads. */
-export async function syncIfDue(dir: string, makeOptions: () => SyncOptions, budgetMs = Number(process.env.SCOPEBOND_POLICY_SYNC_MS ?? INLINE_BUDGET_MS), now = Date.now()): Promise<SyncOutcome | null> {
+export async function syncIfDue(dir: string, makeOptions: () => SyncOptions, budgetMs = Number(setting("SCOPEBOND_POLICY_SYNC_MS") ?? INLINE_BUDGET_MS), now = Date.now()): Promise<SyncOutcome | null> {
   try {
-    if (process.env.SCOPEBOND_POLICY_SYNC === "off") return null;
+    if (setting("SCOPEBOND_POLICY_SYNC") === "off") return null;
     if (!existsSync(connectionPath(dir))) return null;
     // Due five minutes after the last attempt, whether it worked or not: a workspace that cannot be reached is not tried again
     // on every tool call.

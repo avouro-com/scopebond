@@ -63,7 +63,8 @@ from npm. With the signed installer on Windows, type `scopebond-agent hook <comm
 forms work without changing it).
 
 `install` sets Scopebond up **once per developer machine**, not per repository: it
-scaffolds a user-level home (`~/.scopebond`, override `SCOPEBOND_HOME`) with a
+scaffolds a user-level home (`~/.scopebond` in your operating system account's home folder, override
+`SCOPEBOND_HOME`; see [What the hook trusts in its environment](#what-the-hook-trusts-in-its-environment)) with a
 signing key, a countersigning key and a starter policy, and registers the hook by
 absolute path in your user-level `~/.claude/settings.json`, `~/.cursor/hooks.json`,
 or `~/.codex/hooks.json` (`$CODEX_HOME/hooks.json` when `CODEX_HOME` is set, as Codex
@@ -193,9 +194,11 @@ but not change or delete) is not a rule in that list: it always blocks. The fold
 names, in any case and in their `%…%`, `$env:…` and short-name spellings; an install moved elsewhere is not covered.
 It also covers the shell startup files (`.zshrc`, `.bashrc`, `.profile`, `.zshenv`, fish and PowerShell profiles,
 `/etc/profile.d`, `environment.d`), wherever they sit, since a line added there runs in every later session; edit
-those yourself. Setting `SCOPEBOND_HOME`, `SCOPEBOND_HOOK_DIR` or a coding agent's config folder for every later
-session (`setx`, `launchctl setenv`) counts as switching Scopebond off, and once your own install exists a hook
-call follows `SCOPEBOND_HOOK_DIR` only to that install or to a project folder you trusted. A project set up by an earlier version, whose rules were never
+those yourself. Setting `SCOPEBOND_HOME`, `SCOPEBOND_HOOK_DIR`, `SCOPEBOND_POLICY_KEYS_JSON`, `SCOPEBOND_PACK_ENGINE_LEVEL`,
+a `SCOPEBOND_POLICY_SYNC` setting, `NODE_OPTIONS` (any value), `NODE_PATH` or a coding agent's config folder for every later
+session (`setx`, `launchctl setenv`), or when starting a coding agent, counts as switching Scopebond off, and once your
+own install exists a hook call follows `SCOPEBOND_HOOK_DIR` only to that install or to a project folder you trusted.
+Even then, allowances and workspace rules documents are read from your own install, never from the project folder. A project set up by an earlier version, whose rules were never
 edited, moves to recording on the first run after the update and keeps the old policy as
 `policy.previous.json`; a project with its own edits keeps blocking what it blocked.
 Each clause description is generated from the list too, so it
@@ -991,6 +994,25 @@ patterns: the hook compiles its choices with the same compiler as `rules apply`.
   without rules. `status` shows which rules are in force and when they were last checked.
 
 Set `SCOPEBOND_POLICY_SYNC=off` to stop the five-minute check (the rules in force stay).
+
+### What the hook trusts in its environment
+
+- **Settings.** An npm install reads `SCOPEBOND_HOME`, `SCOPEBOND_POLICY_KEYS_JSON`, `SCOPEBOND_PACK_ENGINE_LEVEL`,
+  `SCOPEBOND_POLICY_SYNC` and `SCOPEBOND_POLICY_SYNC_MS` from the environment. The signed installer's program (and the
+  signed engine bundle it loads) reads them only from its hook command, written after the command as
+  `--setting NAME=VALUE`; in the environment they are ignored, and `doctor` lists them as not used. A hook command it
+  starts itself (a background compaction, the session heartbeat, a sign-in) is given the same settings.
+  `SCOPEBOND_AS_SIGNED_BUILD=1` reads them the signed way on any install.
+- **Node's code-loading variables.** A hook call blocks the action and says why while `NODE_PATH` is set, or while
+  `NODE_OPTIONS` carries a flag that loads or changes code in the program that decides: `--require`/`-r`, `--import`,
+  `--loader`/`--experimental-loader`, `--inspect…`/`--debug…`, `--experimental-policy`, `--policy-integrity`,
+  `--disable-…`, `--expose…`, `--eval`/`-e`, `--print`/`-p`, `--openssl-config` or `--env-file…` (a value whose quotes do
+  not close counts too). Memory and diagnostics flags such as `--max-old-space-size`, `--max-semi-space-size`,
+  `--stack-size`, `--no-warnings`, `--trace-warnings`, `--enable-source-maps` and `--dns-result-order` do not block.
+  `doctor`, `status` and the other commands still run, and `doctor` names the variable and flag as a problem.
+- **The home folder.** Scopebond's own folder, and the home folder its rules mean by `~`, come from the operating system
+  account (`os.userInfo().homedir`), not from `HOME` or `USERPROFILE`. When those name another folder, the account's
+  wins and `doctor` says so.
 
 Every call the hook makes to the workspace (sign-in and enrollment, the rules check and its
 confirmation, record delivery and summaries, observations, credential renewal, recovery,

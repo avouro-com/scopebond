@@ -125,8 +125,10 @@ test("every supported cell has vectors, and a vector change changes the digest",
 test("proof fixtures pass for every supported cell, run only in temp state and never claim verified", async () => {
   // Point every home-ish location at an empty directory and confirm nothing lands there.
   const fakeHome = temp("sb-fakehome-");
-  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, SCOPEBOND_HOOK_DIR: process.env.SCOPEBOND_HOOK_DIR };
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, SCOPEBOND_HOOK_DIR: process.env.SCOPEBOND_HOOK_DIR, SCOPEBOND_HOME: process.env.SCOPEBOND_HOME };
   process.env.HOME = fakeHome; process.env.USERPROFILE = fakeHome; delete process.env.SCOPEBOND_HOOK_DIR;
+  // Scopebond's home follows the operating system account, not HOME: point it into the fake home too (it must stay empty).
+  process.env.SCOPEBOND_HOME = join(fakeHome, ".scopebond");
   const cwdBefore = readdirSync(process.cwd());
   let proofs;
   try { proofs = await runProofFixtures(VERSION); }
@@ -173,7 +175,7 @@ test("recorded proofs round-trip and are only trusted for the same adapter and v
 test("the capabilities command prints an honest manifest and exits zero", () => {
   const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
   const dir = temp("sb-cli-caps-");
-  const run = (...args) => spawnSync(process.execPath, [cli, "capabilities", ...args], { encoding: "utf8", env: { ...process.env, SCOPEBOND_HOOK_DIR: dir, HOME: dir, USERPROFILE: dir }, timeout: 120000 });
+  const run = (...args) => spawnSync(process.execPath, [cli, "capabilities", ...args], { encoding: "utf8", env: { ...process.env, SCOPEBOND_HOOK_DIR: dir, HOME: dir, USERPROFILE: dir, SCOPEBOND_HOME: join(dir, ".scopebond") }, timeout: 120000 });
   const text = run();
   assert.equal(text.status, 0, text.stderr);
   assert.match(text.stdout, /nested_orchestration\s+before action unsupported/);

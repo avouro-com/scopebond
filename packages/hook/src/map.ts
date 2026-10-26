@@ -9,7 +9,7 @@
 // ambiguous Windows short path.
 
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { accountHome } from "./env-trust.js";
 import { posix } from "node:path";
 import { digest, keyedDigest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
 import { isCredentialName, maskWords, pipedSecrets, type PipedSecret } from "@scopebond/gateway";
@@ -1146,10 +1146,15 @@ function launchesHarness(sc: SimpleCommand): boolean {
 // The variables that move a coding agent's config folder, and with it the hooks it loads: its own, the XDG base folder, and the
 // home folder (`~/.claude`, `~/.codex`, `~/.cursor` and `~/.copilot` sit there).
 const HARNESS_CONFIG_VARS = ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "CURSOR_CONFIG_DIR", "COPILOT_HOME", "XDG_CONFIG_HOME", "HOME", "USERPROFILE"];
-// The variables that move Scopebond's own folder, and with it the rules a hook call reads: a coding agent started with one of
-// them set, or a session that inherits one, runs under rules of the agent's choosing.
-const SCOPEBOND_CONFIG_VARS = ["SCOPEBOND_HOOK_DIR", "SCOPEBOND_HOME"];
-const MOVES_CONFIG = new Set([...HARNESS_CONFIG_VARS, ...SCOPEBOND_CONFIG_VARS]);
+// The variables that move Scopebond's own folder or change what a hook call trusts, and with them the rules it reads: a coding
+// agent started with one of them set, or a session that inherits one, runs under rules of the agent's choosing. That is the
+// folder (SCOPEBOND_HOOK_DIR, SCOPEBOND_HOME), extra keys for workspace rules, the rule-pack engine level, the workspace rules
+// check (SCOPEBOND_POLICY_SYNC and any SCOPEBOND_POLICY_SYNC… variable), and the two variables that load code into Node before
+// the hook runs (NODE_OPTIONS, NODE_PATH).
+const SCOPEBOND_CONFIG_VARS = ["SCOPEBOND_HOOK_DIR", "SCOPEBOND_HOME", "SCOPEBOND_POLICY_KEYS_JSON", "SCOPEBOND_PACK_ENGINE_LEVEL", "SCOPEBOND_POLICY_SYNC", "SCOPEBOND_POLICY_SYNC_MS", "NODE_OPTIONS", "NODE_PATH"];
+const MOVES_CONFIG_NAMES = new Set([...HARNESS_CONFIG_VARS, ...SCOPEBOND_CONFIG_VARS]);
+/** Whether setting the variable `name` moves a config folder or changes what a hook call trusts (names are upper-cased). */
+const movesConfig = (name: string): boolean => MOVES_CONFIG_NAMES.has(name) || name.startsWith("SCOPEBOND_POLICY_SYNC");
 /** Whether a command sets a variable for every later session, not just the commands after it in this call: Windows `setx`,
  *  macOS `launchctl setenv`, and PowerShell's `[Environment]::SetEnvironmentVariable(…, 'User' | 'Machine')`. */
 function setsForLaterSessions(sc: SimpleCommand): boolean {
@@ -1237,8 +1242,8 @@ function scanCall(commands: SimpleCommand[]): { switchOff: boolean; gitConfigs: 
   let switchOff = false;
   for (const sc of commands) {
     const own = assignmentsOf(sc.assigns ?? []);
-    if (launchesHarness(sc) && [...MOVES_CONFIG].some((n) => own.has(n) || env.has(n))) switchOff = true;
-    if (setsForLaterSessions(sc) && variablesSet(sc).some(({ name }) => MOVES_CONFIG.has(name))) switchOff = true;
+    if (launchesHarness(sc) && [...own.keys(), ...env.keys()].some(movesConfig)) switchOff = true;
+    if (setsForLaterSessions(sc) && variablesSet(sc).some(({ name }) => movesConfig(name))) switchOff = true;
     if (env.size && !sc.opaque && canonProgram(sc.program) === "git") {
       const configs = gitEnvConfigs(new Map([...env].filter(([n]) => !own.has(n))));
       if (configs.length) gitConfigs.set(sc, configs);
@@ -1533,7 +1538,7 @@ function runFolder(runDir: string, cwd?: string): string {
  *  relative to the folder the command runs in (`folder`; this process's folder when none is known). Read only when a pack in
  *  force asks for a local fact (`env_var`, `file_sha256`, `config_value`, …). */
 function packProbe(folder: string): PackProbe {
-  const at = folder === "~" || folder.startsWith("~/") ? homedir() + folder.slice(1) : folder;
+  const at = folder === "~" || folder.startsWith("~/") ? accountHome() + folder.slice(1) : folder;
   return { env: (name) => process.env[name], files: systemFiles, cwd: at || process.cwd() };
 }
 

@@ -107,7 +107,7 @@ async function flushAfter(ingestStatus, inputs) {
       execFile(process.execPath, [cli, "flush"], {
         cwd: dir, timeout: 30_000,
         // Its own home: nothing here reads or writes the real one.
-        env: { ...process.env, SCOPEBOND_HOOK_DIR: dir, HOME: home, USERPROFILE: home },
+        env: { ...process.env, SCOPEBOND_HOOK_DIR: dir, HOME: home, USERPROFILE: home, SCOPEBOND_HOME: join(home, ".scopebond") },
       }, (error, stdout, stderr) => resolve({ code: error ? error.code : 0, stdout, stderr }));
     });
     return { ...result, ingested: ws.ingested };

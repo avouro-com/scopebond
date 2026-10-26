@@ -16,6 +16,7 @@ import { canonical } from "@scopebond/gateway";
 import { findProgram, programPath, windowsSystemProgram } from "@scopebond/gateway/node";
 import { readIfPresent, replaceFile } from "./safe-fs.js";
 import { hookCliPath } from "./self.js";
+import { accountHome, setting } from "./env-trust.js";
 import { editHarnessConfig, readConfigText as readBoundedConfigText } from "./config-edit.js";
 
 import { adapterFile, adapterPresent, GROUPED_LIFECYCLE_EVENTS, type Harness } from "./adapters.js";
@@ -38,9 +39,11 @@ export function copilotHome(): string {
   return process.env.COPILOT_HOME || join(homedir(), ".copilot");
 }
 
-/** The user-level Scopebond home. `SCOPEBOND_HOME` overrides it (tests, CI). */
+/** The user-level Scopebond home: `.scopebond` in the operating system account's home folder (never HOME or USERPROFILE,
+ *  which any program can change for what it starts). `SCOPEBOND_HOME` overrides it on an npm install (tests, CI); a signed
+ *  build takes it only from the hook's command line (env-trust.ts). */
 export function userHome(): string {
-  return process.env.SCOPEBOND_HOME ?? join(homedir(), ".scopebond");
+  return setting("SCOPEBOND_HOME") ?? join(accountHome(), ".scopebond");
 }
 
 /** The user-level agent config file for a harness. `HOME`/`USERPROFILE` (via homedir)
@@ -286,10 +289,9 @@ export function isTrustedProject(dir: string): boolean {
  *  may allow or ask, and on what terms), allowances and the record of earlier overrides. The config folder itself, except a
  *  project folder that governs only because the person trusted it (a user-level install exists): the trust pins the
  *  project's rule files, never this state, so a repository could otherwise bring an allowance for an action its trusted
- *  policy blocks. For such a project it is the user-level home. */
+ *  policy blocks. For such a project it is the user-level home. That holds when SCOPEBOND_HOOK_DIR names the trusted
+ *  folder too: only an override that names the user-level home itself reads this state from the folder it names. */
 export function decisionStateDir(dir: string): string {
-  const override = honouredOverride();
-  if (override && samePath(override, dir)) return dir;
   const home = userHome();
   if (samePath(dir, home) || !existsSync(join(home, "policy.json"))) return dir;
   return home;

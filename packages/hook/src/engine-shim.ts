@@ -12,12 +12,12 @@
 // The executable is the stable shim: a computer with the signed install may have no Node.js, so its hook entry cannot run
 // a script file, and entries written by any earlier agent keep working unchanged.
 //
-// This file is loaded before the engine on every hook call, so it imports only Node's built-ins.
+// This file is loaded before the engine on every hook call, so it imports only Node's built-ins (and env-trust.ts, which does too).
 
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
+import { accountHome, setting } from "./env-trust.js";
 import { dirname, join } from "node:path";
 import { compileFunction, constants as vmConstants } from "node:vm";
 
@@ -56,9 +56,10 @@ export function compareEngineVersions(a: string, b: string): number {
   return 0;
 }
 
-/** The hook's home, as `userHome()` (install.ts) finds it; repeated here so the shim loads nothing else. */
+/** The hook's home, as `userHome()` (install.ts) finds it: SCOPEBOND_HOME where this build reads it (env-trust.ts), else
+ *  `.scopebond` in the operating system account's home folder. Repeated here so the shim loads nothing else. */
 export function engineHome(env: NodeJS.ProcessEnv = process.env): string {
-  return env.SCOPEBOND_HOME ?? join(homedir(), ".scopebond");
+  return setting("SCOPEBOND_HOME", env) ?? join(accountHome(), ".scopebond");
 }
 
 /** `<home>/engine`: the version folders, current.json and the start-failure log. */

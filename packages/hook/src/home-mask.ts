@@ -12,12 +12,14 @@
 // are. An absolute one is rewritten the same way when the rules are loaded (`maskHomeInPolicy`) and when a rule is
 // added (`pathRuleFor`), so both sides of every comparison are spelled alike.
 //
-// The home folder is what the system reports (`os.homedir()`) and the `HOME` and `USERPROFILE` values, so a shell
+// The home folder is the operating system account's (`os.userInfo().homedir`), what Node reports (`os.homedir()`) and the
+// `HOME` and `USERPROFILE` values, so a shell
 // with a different `HOME` (Git Bash, WSL interop, a sandbox) is covered too, along with the Git Bash and WSL
 // spellings of a Windows home (`/c/…` and `/mnt/c/…` for drive C). A Windows-style home is matched in any case
 // and with either separator. A home of `/` or a bare drive is never masked: every path would collapse to `~`.
 
 import { homedir } from "node:os";
+import { accountHome } from "./env-trust.js";
 
 /** One home folder: its spelling with "/" separators and no trailing separator. */
 type Home = { path: string; fold: boolean };
@@ -38,11 +40,16 @@ function safeHomedir(): string | undefined {
   try { return homedir(); } catch { return undefined; }
 }
 
-/** The current account's home folder in every spelling the process knows: `os.homedir()`, `HOME` and `USERPROFILE`
- *  (each with "/" separators, no trailing separator). Empty or root values are left out. */
-export function homeFolders(env: NodeJS.ProcessEnv = process.env, home: string | undefined = safeHomedir()): string[] {
+function safeAccountHome(): string | undefined {
+  try { return accountHome(); } catch { return undefined; }
+}
+
+/** The current account's home folder in every spelling the process knows: the operating system account's (for this process's
+ *  own environment), `os.homedir()`, `HOME` and `USERPROFILE` (each with "/" separators, no trailing separator). Empty or root
+ *  values are left out. */
+export function homeFolders(env: NodeJS.ProcessEnv = process.env, home: string | undefined = safeHomedir(), account: string | undefined = env === process.env ? safeAccountHome() : undefined): string[] {
   const out: string[] = [];
-  for (const candidate of [home, env.HOME, env.USERPROFILE]) {
+  for (const candidate of [account, home, env.HOME, env.USERPROFILE]) {
     const s = normalise(candidate);
     if (s && !out.some((o) => o.toLowerCase() === s.toLowerCase())) out.push(s);
   }

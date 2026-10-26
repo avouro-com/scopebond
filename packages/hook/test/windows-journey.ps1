@@ -125,14 +125,19 @@ function Invoke-HookEvent([string] $Command, [string] $Payload) {
   return [pscustomobject]@{ Code = $proc.ExitCode; Out = $out }
 }
 
-function Save-Env { return @{ USERPROFILE = $env:USERPROFILE; HOME = $env:HOME; APPDATA = $env:APPDATA; PATH = $env:PATH; Location = (Get-Location).Path } }
+function Save-Env { return @{ USERPROFILE = $env:USERPROFILE; HOME = $env:HOME; APPDATA = $env:APPDATA; PATH = $env:PATH; SCOPEBOND_HOME = $env:SCOPEBOND_HOME; Location = (Get-Location).Path } }
 function Restore-Env($Saved) {
   $env:USERPROFILE = $Saved.USERPROFILE; $env:HOME = $Saved.HOME; $env:APPDATA = $Saved.APPDATA; $env:PATH = $Saved.PATH
+  if ($Saved.SCOPEBOND_HOME) { $env:SCOPEBOND_HOME = $Saved.SCOPEBOND_HOME } else { Remove-Item Env:SCOPEBOND_HOME -ErrorAction SilentlyContinue }
   Set-Location $Saved.Location
 }
+# Another person on this computer, simulated in this account: their Windows profile is $ProfileDir. Scopebond finds its own
+# folder from the operating system account (not USERPROFILE), so the simulated person's folder is named with SCOPEBOND_HOME,
+# which an npm install reads; a real second account would find it there on its own.
 function Set-Profile([string] $ProfileDir, [string] $HomeOverride = '') {
   New-Item -ItemType Directory -Force -Path (Join-Path $ProfileDir 'AppData\Roaming') | Out-Null
   $env:USERPROFILE = $ProfileDir
+  $env:SCOPEBOND_HOME = Join-Path $ProfileDir '.scopebond'
   if ($HomeOverride) { New-Item -ItemType Directory -Force -Path $HomeOverride | Out-Null; $env:HOME = $HomeOverride } else { $env:HOME = $ProfileDir }
   $env:APPDATA = Join-Path $ProfileDir 'AppData\Roaming'
 }
@@ -193,6 +198,9 @@ if ($IsolatedHome) {
 }
 Remove-Item Env:SCOPEBOND_HOME, Env:SCOPEBOND_HOOK_DIR, Env:CLAUDECODE -ErrorAction SilentlyContinue
 $sbHome = Join-Path $env:USERPROFILE '.scopebond'
+# The throwaway profile stands in for this account's own: Scopebond's folder follows the operating system account, so it
+# is named here (an npm install reads SCOPEBOND_HOME) and the real one is never touched.
+if ($IsolatedHome) { $env:SCOPEBOND_HOME = $sbHome }
 # A person's first terminal often opens in a project folder; the journey runs from one.
 $project = Join-Path $work 'my-project'
 New-Item -ItemType Directory -Path $project | Out-Null

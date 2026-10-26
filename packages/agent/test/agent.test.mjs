@@ -147,8 +147,8 @@ test("the running agent answers on its token-protected local channel, and only o
 
 test("repair puts the hook back into agent settings that lost it, and touches nothing else", () => {
   const home = mkdtempSync(join(tmpdir(), "sb-agent-home-"));
-  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
-  process.env.HOME = home; process.env.USERPROFILE = home;
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, SCOPEBOND_HOME: process.env.SCOPEBOND_HOME };
+  process.env.HOME = home; process.env.USERPROFILE = home; process.env.SCOPEBOND_HOME = join(home, ".scopebond");
   try {
     mkdirSync(join(home, ".claude"), { recursive: true });
     writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ model: "opus", hooks: { PreToolUse: [] } }));
@@ -162,7 +162,7 @@ test("repair puts the hook back into agent settings that lost it, and touches no
     assert.deepEqual(missingHookEntries(["claude"]), []);
     assert.deepEqual(repairHookEntries(["claude"]), [], "nothing to repair the second time");
   } finally {
-    process.env.HOME = saved.HOME; process.env.USERPROFILE = saved.USERPROFILE;
+    process.env.HOME = saved.HOME; process.env.USERPROFILE = saved.USERPROFILE; if (saved.SCOPEBOND_HOME === undefined) delete process.env.SCOPEBOND_HOME; else process.env.SCOPEBOND_HOME = saved.SCOPEBOND_HOME;
   }
 });
 
@@ -207,8 +207,8 @@ test("versions compare numerically and hook commands name the version they run",
 
 test("hook upkeep pins older Scopebond entries to the carried hook, repairs broken ones, holds when asked, and leaves other hooks alone", () => {
   const home = mkdtempSync(join(tmpdir(), "sb-agent-home-"));
-  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
-  process.env.HOME = home; process.env.USERPROFILE = home;
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, SCOPEBOND_HOME: process.env.SCOPEBOND_HOME };
+  process.env.HOME = home; process.env.USERPROFILE = home; process.env.SCOPEBOND_HOME = join(home, ".scopebond");
   try {
     mkdirSync(join(home, ".claude"), { recursive: true });
     const file = join(home, ".claude", "settings.json");
@@ -232,7 +232,7 @@ test("hook upkeep pins older Scopebond entries to the carried hook, repairs brok
     assert.equal(repaired.length, 1, "a broken entry is repaired even while held");
     assert.match(repaired[0].reason, /could not start/);
   } finally {
-    process.env.HOME = saved.HOME; process.env.USERPROFILE = saved.USERPROFILE;
+    process.env.HOME = saved.HOME; process.env.USERPROFILE = saved.USERPROFILE; if (saved.SCOPEBOND_HOME === undefined) delete process.env.SCOPEBOND_HOME; else process.env.SCOPEBOND_HOME = saved.SCOPEBOND_HOME;
   }
 });
 
@@ -267,8 +267,8 @@ test("the agent reads the versions its workspace names, and treats anything odd 
 
 test("the self-check names what is broken locally and sends a signed proof to the workspace", async () => {
   const home = mkdtempSync(join(tmpdir(), "sb-agent-home-"));
-  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
-  process.env.HOME = home; process.env.USERPROFILE = home;
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, SCOPEBOND_HOME: process.env.SCOPEBOND_HOME };
+  process.env.HOME = home; process.env.USERPROFILE = home; process.env.SCOPEBOND_HOME = join(home, ".scopebond");
   try {
     const dir = await computerWithQueue("https://workspace.example", 0);
     const connection = { url: "https://workspace.example", credential: "sbm_test", credential_id: "cred_1", gateway_id: "gw_1", expires_at: new Date(Date.now() + 2 * 86400_000).toISOString() };
@@ -304,7 +304,7 @@ test("the self-check names what is broken locally and sends a signed proof to th
     assert.equal(offline.ok, false);
     assert.match(offline.failed[0], /^workspace_unreachable/);
   } finally {
-    process.env.HOME = saved.HOME; process.env.USERPROFILE = saved.USERPROFILE;
+    process.env.HOME = saved.HOME; process.env.USERPROFILE = saved.USERPROFILE; if (saved.SCOPEBOND_HOME === undefined) delete process.env.SCOPEBOND_HOME; else process.env.SCOPEBOND_HOME = saved.SCOPEBOND_HOME;
   }
 });
 
@@ -451,8 +451,8 @@ test("the tray script carries the home folder only as data, and notifications fi
 
 test("against a workspace without the self-check, only this computer's own checks count", async () => {
   const home = mkdtempSync(join(tmpdir(), "sb-agent-home-"));
-  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
-  process.env.HOME = home; process.env.USERPROFILE = home;
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, SCOPEBOND_HOME: process.env.SCOPEBOND_HOME };
+  process.env.HOME = home; process.env.USERPROFILE = home; process.env.SCOPEBOND_HOME = join(home, ".scopebond");
   try {
     const dir = await computerWithQueue("https://workspace.example", 0);
     const connection = { url: "https://workspace.example", credential: "sbm_test", credential_id: "cred_1", gateway_id: "gw_1", expires_at: new Date(Date.now() + 60 * 86400_000).toISOString() };
@@ -460,7 +460,7 @@ test("against a workspace without the self-check, only this computer's own check
     assert.equal(result.signature_verified, false);
     assert.ok(!result.failed.some((f) => f.startsWith("workspace_")), "a missing route is not a failure");
     assert.deepEqual(result.failed, result.checks.filter((c) => !c.ok).map((c) => c.id));
-  } finally { process.env.HOME = saved.HOME; process.env.USERPROFILE = saved.USERPROFILE; }
+  } finally { process.env.HOME = saved.HOME; process.env.USERPROFILE = saved.USERPROFILE; if (saved.SCOPEBOND_HOME === undefined) delete process.env.SCOPEBOND_HOME; else process.env.SCOPEBOND_HOME = saved.SCOPEBOND_HOME; }
 });
 
 test("stop ends the running agent, so turning autostart off and uninstalling leaves nothing running", async () => {

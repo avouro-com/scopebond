@@ -90,7 +90,8 @@ import { heldArtifacts } from "./signed-artifacts.js";
 import type { Pack } from "@scopebond/policy-schema/pack";
 import { describePackSync } from "./pack-sync.js";
 import { approvedWorkspaceId, machineIdField, machineIdFor } from "./machine-id.js";
-import { HOT_PATH_STORE_BUSY_MS, WAIT_RESERVE_MS, hookDeadlineRemainingMs, waitWithinDeadline } from "./hook-deadline.js";
+import { HOT_PATH_STORE_BUSY_MS, WAIT_RESERVE_MS, hookDeadlineRemainingMs, refuseHookCall, waitWithinDeadline } from "./hook-deadline.js";
+import { accountHome, describeCodeLoading, ignoredSettings, movedHome, takeSettingArgs } from "./env-trust.js";
 import { policyKeyProblems } from "./policy-keys.js";
 import { recordDeliveryAttempt, recordRulesCredential } from "./delivery-state.js";
 import { describeDelivery, flushOutcome } from "./delivery-report.js";
@@ -2116,6 +2117,17 @@ async function runDoctor(args: string[] = []): Promise<void> {
   const cli = isSingleExecutable() ? process.execPath : cliPath();
   log(`  cli              ${cli} ${existsSync(cli) ? "ok" : "MISSING"}${isSingleExecutable() ? " (the signed installer's program)" : ""}`);
   check("cli", existsSync(cli), cli);
+  // The environment a hook call runs in: Node's code-loading variables block every hook call, the home folder is the
+  // operating system account's, and a signed build reads its settings from the hook's command line only.
+  const loaders = describeCodeLoading();
+  log(`  environment      ${loaders.length ? `${loaders.join(", ")} SET — every tool call is blocked while ${loaders.length > 1 ? "they are" : "it is"} set` : "ok"}`);
+  check("environment", loaders.length === 0, loaders.length ? loaders.join(", ") : "no code-loading variable");
+  if (loaders.length) problem("environment", `${loaders.join(" and ")} ${loaders.length > 1 ? "are" : "is"} set: ${loaders.length > 1 ? "they" : "it"} can load other code into the hook, so it blocks every tool call; remove ${loaders.length > 1 ? "them" : "it"} from the environment your coding tool starts in, then start the tool again`);
+  const moved = movedHome();
+  if (moved) log(`  home folder      ${accountHome()} (this account's); HOME/USERPROFILE names ${moved}, which Scopebond does not use`);
+  check("home folder", true, moved ? `${accountHome()} (HOME/USERPROFILE names ${moved}, not used)` : accountHome());
+  const ignoredVars = ignoredSettings();
+  if (ignoredVars.length) log(`  settings         ${ignoredVars.join(", ")} set in the environment, NOT USED (this build reads them only from its hook command line)`);
   const active = resolveConfigDir(process.cwd());
   const hasPolicy = existsSync(join(active, "policy.json"));
   log(`  active config    ${active} ${hasPolicy ? "ok" : `no policy (run \`${cliCommand("init")}\` here, or \`${cliCommand("install")}\` once for your user)`}`);
@@ -2742,7 +2754,19 @@ function nodeSupported(version = process.versions.node): boolean {
   return major > 22 || (major === 22 && minor >= 13);
 }
 
+/** Why a hook call refuses to decide while Node's code-loading variables are set, or null when none is. */
+function codeLoadingRefusal(env: NodeJS.ProcessEnv = process.env): string | null {
+  const names = describeCodeLoading(env);
+  if (!names.length) return null;
+  const which = names.join(" and ");
+  const them = names.length > 1 ? "them" : "it";
+  return `Scopebond: ${which} ${names.length > 1 ? "are" : "is"} set in this coding tool's environment, and ${names.length > 1 ? "they" : "it"} can load or change code in the program that checks each action, so this action is blocked. Remove ${them} from the environment the coding tool starts in (a shell startup file, a variable set for every session, the tool's own settings), start the tool again, then run the Scopebond doctor command.`;
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  // Settings the installer put on the hook's command line (`--setting NAME=VALUE`, env-trust.ts) are kept for the call and
+  // taken out of the arguments, so no command sees them.
+  argv = takeSettingArgs(argv);
   const [cmd, ...rest] = argv;
   // A setup command on an older Node would scaffold and wire the agent, then fail on the
   // first action with an error about a missing module. Stop before changing anything, and
@@ -2754,6 +2778,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   if ((cmd === "claude" || cmd === "codex" || cmd === "copilot") && repositoryHookNotGovernedHere(rest)) {
     process.stderr.write("Scopebond: this repository's hook is not connected on this computer; nothing is checked\n");
     process.exit(0);
+  }
+  // A hook call (a coding tool asking about an action) never decides in a process Node may have loaded other code into.
+  // The other commands (doctor, status, …) still run; doctor names the variable.
+  if (cmd === "claude" || cmd === "cursor" || cmd === "codex" || cmd === "copilot") {
+    const refusal = codeLoadingRefusal();
+    if (refusal) refuseHookCall(cmd, refusal);
   }
   if (cmd === "claude") { await runClaude(); }
   else if (cmd === "cursor") { await runCursor(); }

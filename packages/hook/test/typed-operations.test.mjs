@@ -329,7 +329,7 @@ test("`observations id` prints the opaque ids the operations carry, without need
   const dir = mkdtempSync(join(tmpdir(), "sb-id-"));
   const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
   const id = (...args) => {
-    const r = spawnSync(process.execPath, [cli, "observations", "id", ...args], { encoding: "utf8", env: { ...process.env, SCOPEBOND_HOOK_DIR: dir, HOME: dir, USERPROFILE: dir }, cwd: dir, timeout: 30000 });
+    const r = spawnSync(process.execPath, [cli, "observations", "id", ...args], { encoding: "utf8", env: { ...process.env, SCOPEBOND_HOOK_DIR: dir, HOME: dir, USERPROFILE: dir, SCOPEBOND_HOME: join(dir, ".scopebond") }, cwd: dir, timeout: 30000 });
     return { status: r.status, out: r.stdout.trim() };
   };
   const a = id("remote", "git@github.com:Acme/Widgets.git");

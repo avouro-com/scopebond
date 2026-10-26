@@ -43,7 +43,9 @@ let rest: string[] = [];
 // What a person types here: `scopebond-agent` from the signed installer (on PATH); from npm on Windows the .cmd shim,
 // because PowerShell blocks the plain name's script shim.
 const me = agentProgram();
-const dir = process.env.SCOPEBOND_HOME ?? userHome();
+// The Scopebond home (userHome): SCOPEBOND_HOME where this build reads it (an npm install; the signed build only from its
+// command line), else `.scopebond` in the operating system account's home folder.
+const dir = userHome();
 
 function help(): void {
   const c = (sub: string) => `${me} ${sub}`.padEnd(me.length + 36);

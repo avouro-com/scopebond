@@ -27,7 +27,7 @@ import { join } from "node:path";
 import {
   checkStagedEngine, compareEngineVersions, engineDir, engineStartFailures, engineVersionDir, hookVersion, isEngineVersion, isSingleExecutable, loadPacks,
   readCurrentEngine, verifyEngineManifest, writeCurrentEngine, ENGINE_CANDIDATE_ENV, ENGINE_FILE, ENGINE_MANIFEST, ENGINE_SIGNATURE, MAX_ENGINE_START_FAILURES,
-  type CurrentEngine, type EngineKey,
+  settingsEnv, SETTING_FLAG, type CurrentEngine, type EngineKey,
 } from "@scopebond/hook";
 import { unpackTgz } from "./tgz.js";
 import { updaterKeys, type InstallKind, type UpdaterKey } from "./native-update.js";
@@ -84,7 +84,10 @@ const engineKeys = (keys: readonly UpdaterKey[]): EngineKey[] => keys.map((k) =>
  *  bundle or fails), or, outside the single executable, Node running the bundle file. `{ ok, output }`: the command's JSON
  *  report, or why there is none. */
 export function runEngineCandidate(dir: string, version: string, timeoutMs = 120_000): Promise<{ ok: boolean; output: string }> {
-  const args = ["packs", "test", "--all", "--json"];
+  // The settings this agent itself trusts, and the home, on the command line too: the bundle is a signed build, which reads
+  // them only from there (the hook's env-trust.ts).
+  const settings = Object.entries({ ...settingsEnv(), SCOPEBOND_HOME: dir }).flatMap(([name, value]) => [SETTING_FLAG, `${name}=${value}`]);
+  const args = ["packs", "test", "--all", "--json", ...settings];
   const [program, argv] = isSingleExecutable() ? [process.execPath, ["hook", ...args]] : [process.execPath, [join(engineVersionDir(dir, version), ENGINE_FILE), ...args]];
   return new Promise((resolve) => {
     const child = spawn(program, argv, {

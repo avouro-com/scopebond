@@ -18,12 +18,12 @@ function computer() {
   const project = mkdtempSync(join(tmpdir(), "sb-dupes-project-"));
   mkdirSync(join(home, ".claude"), { recursive: true });
   mkdirSync(join(project, ".claude"), { recursive: true });
-  return { home, project, env: { ...process.env, HOME: home, USERPROFILE: home } };
+  return { home, project, env: { ...process.env, HOME: home, USERPROFILE: home, SCOPEBOND_HOME: join(home, ".scopebond") } };
 }
 const write = (file, value) => writeFileSync(file, JSON.stringify(value, null, 2));
 function withHome(home, fn) {
-  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
-  process.env.HOME = home; process.env.USERPROFILE = home;
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, SCOPEBOND_HOME: process.env.SCOPEBOND_HOME };
+  process.env.HOME = home; process.env.USERPROFILE = home; process.env.SCOPEBOND_HOME = join(home, ".scopebond");
   try { return fn(); } finally {
     for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
