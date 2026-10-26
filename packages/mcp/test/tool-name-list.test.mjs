@@ -1,7 +1,8 @@
 // A tool call is decided by its exact tool name, but some upstreams resolve tool names loosely (another case, a
 // full-width form). A rule that denies a tool by its exact name could then be passed by a call spelled another way.
-// The proxy forwards a call only under a name that is exactly one tool of the upstream's own tool list, with no
-// other listed tool spelled the same way up to case and width; without a list it forwards none.
+// In enforce mode the proxy forwards a call only under a name that is exactly one tool of the upstream's own tool list,
+// with no other listed tool spelled the same way up to case and width; without a list it forwards none. In monitor mode
+// the finding is recorded on the receipt and the call is forwarded.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
@@ -79,4 +80,56 @@ test("the client's own tool list is the one calls are checked against", async ()
   await proxy.handle({ jsonrpc: "2.0", id: "l", method: "tools/list" });
   assert.ok((await proxy.handle(call(1, "read_file"))).result);
   assert.deepEqual(seen, ["tools/list", "tools/call"], "no second listing was needed");
+});
+
+// Monitor mode: nothing is blocked for a tool-list finding. The finding is recorded on the receipt's action
+// (`tool_listing`) and the call is forwarded. In enforce mode the same finding denies the call and is recorded too.
+const MONITOR_POLICY = { ...POLICY, clauses: POLICY.clauses.map((c) => ({ ...c, mode: "monitor" })) };
+const binder = { generation: "bk_test", requestDigest: () => "00".repeat(32), resourceId: (k, v) => `sbr_${k}_${v}` };
+function proxyWith(upstream, extra) {
+  const receipts = [];
+  const proxy = createMcpProxy({
+    policy: POLICY, principal: { subject: "client:names", issuer: "scopebond:mcp-proxy" }, server: "files", attesterKeyPem: keyPem(), upstream,
+    onReceipt: (r) => receipts.push(r), ...extra,
+  });
+  return { proxy, receipts };
+}
+const listingOf = (receipt) => receipt.payload.intent.params.tool_listing;
+
+test("enforce mode: the finding denies the call and is recorded on its receipt", async () => {
+  const up = looseUpstream(["read_file", "remove_item"]);
+  const { proxy, receipts } = proxyWith(up, {});
+  assert.match((await proxy.handle(call(1, "Remove_Item"))).error.message, /another spelling/);
+  assert.equal(receipts.at(-1).payload.realtime_result, "deny");
+  assert.equal(listingOf(receipts.at(-1)), "spelling_variant");
+  assert.ok((await proxy.handle(call(2, "read_file"))).result);
+  assert.equal(listingOf(receipts.at(-1)), undefined, "an exact listed name has no finding");
+  assert.deepEqual(up.ran, ["read_file"]);
+});
+
+test("monitor mode (a policy whose clauses all monitor): every finding is recorded and the call is forwarded", async () => {
+  const cases = [
+    [["read_file", "remove_item"], "Remove_Item", "spelling_variant"],
+    [["read_file"], "unlisted_tool", "unlisted"],
+    [["read_file", "Read_File"], "read_file", "ambiguous"],
+    [null, "read_file", "no_list"],
+  ];
+  for (const [tools, name, finding] of cases) {
+    const up = looseUpstream(tools);
+    const { proxy, receipts } = proxyWith(up, { policy: MONITOR_POLICY });
+    const reply = await proxy.handle(call(1, name));
+    assert.ok(reply.result, `${name}: ${JSON.stringify(reply)}`);
+    assert.equal(up.ran.length, 1, `${name} was forwarded`);
+    assert.equal(receipts.at(-1).payload.realtime_result, "allow", name);
+    assert.equal(listingOf(receipts.at(-1)), finding, name);
+  }
+});
+
+test("monitor mode (a typed adapter in monitor): an unlisted name is recorded and forwarded; in enforce it is denied", async () => {
+  const monitor = proxyWith(looseUpstream(["read_file"]), { typed: { mode: "monitor", binder } });
+  assert.ok((await monitor.proxy.handle(call(1, "unlisted_tool"))).result);
+  assert.equal(listingOf(monitor.receipts.at(-1)), "unlisted");
+  const enforce = proxyWith(looseUpstream(["read_file"]), { typed: { mode: "enforce", binder } });
+  assert.ok((await enforce.proxy.handle(call(1, "unlisted_tool"))).error);
+  assert.equal(listingOf(enforce.receipts.at(-1)), "unlisted");
 });

@@ -155,19 +155,33 @@ function toolNamesOf(tools: unknown[]): ToolNames {
   return { names, skeletons };
 }
 
-/** Why a `tools/call` naming `name` is refused against the upstream's tool list, or undefined when the name is exactly
- *  one listed tool and no other listed tool shares its skeleton. Without a list, every name is refused: an upstream that
- *  resolves names loosely (another case, a full-width form) could otherwise run a tool a rule denies by its exact name. */
-function toolNameRefusal(listed: ToolNames | undefined, name: string): string | undefined {
-  if (!listed) return "the upstream's tool list could not be read, so the tool name cannot be checked";
+/** What the tool-list check found about a call's tool name, as recorded on the receipt (`tool_listing`). */
+type ToolListing = "unlisted" | "spelling_variant" | "ambiguous" | "no_list";
+const TOOL_LISTING_REASONS: Record<ToolListing, string> = {
+  no_list: "the upstream's tool list could not be read, so the tool name cannot be checked",
+  spelling_variant: "the tool name is another spelling of a listed tool; send the exact name from tools/list",
+  unlisted: "the tool is not in the upstream's tool list",
+  ambiguous: "the upstream lists more than one tool whose names differ only in case or width",
+};
+
+/** What is wrong with a `tools/call` naming `name` against the upstream's tool list, or undefined when the name is exactly
+ *  one listed tool and no other listed tool shares its skeleton. Without a list nothing can be confirmed: an upstream that
+ *  resolves names loosely (another case, a full-width form) could run a tool a rule denies by its exact name. */
+function toolListingFinding(listed: ToolNames | undefined, name: string): ToolListing | undefined {
+  if (!listed) return "no_list";
   const skeleton = toolNameSkeleton(name);
-  if (!listed.names.has(name)) {
-    return listed.skeletons.has(skeleton)
-      ? "the tool name is another spelling of a listed tool; send the exact name from tools/list"
-      : "the tool is not in the upstream's tool list";
-  }
-  if ((listed.skeletons.get(skeleton) ?? 0) > 1) return "the upstream lists more than one tool whose names differ only in case or width";
+  if (!listed.names.has(name)) return listed.skeletons.has(skeleton) ? "spelling_variant" : "unlisted";
+  if ((listed.skeletons.get(skeleton) ?? 0) > 1) return "ambiguous";
   return undefined;
+}
+
+/** Whether a tool-list finding blocks the call. It does where something blocks: a typed adapter in `enforce`, or, without
+ *  one, a policy with a clause that is not `monitor`. In monitor mode (a typed adapter in `monitor`, or a policy whose
+ *  clauses all monitor) the finding is recorded on the receipt and the call is forwarded, as other monitor findings are. */
+function toolListingEnforced(policy: unknown, typed: TypedAdapterConfig | undefined): boolean {
+  if (typed) return typed.mode === "enforce";
+  const clauses = (policy as { clauses?: unknown } | null)?.clauses;
+  return !Array.isArray(clauses) || clauses.some((c) => (c as { mode?: unknown } | null)?.mode !== "monitor");
 }
 
 /** The members of a JSON-RPC message, and of `tools/call` params. Only these are forwarded. */
@@ -294,6 +308,7 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
    *  interval (at least a second, so one call never reads it twice), or when it does not name the tool and is more than
    *  a second old (a tool added since). */
   const namesRecheckMs = Math.max(recheckMs, 1000);
+  const listingEnforced = toolListingEnforced(config.policy, typed);
   const toolNamesFor = async (name: string): Promise<ToolNames | undefined> => {
     const age = listed ? nowMs() - listed.at : Infinity;
     if (!listed || !(age < namesRecheckMs) || (!listed.names.has(name) && !(age < 1000))) await probeToolList();
@@ -362,7 +377,9 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
         const adapterDeny = typed?.mode === "enforce" && description !== undefined && !description.allow;
         // The call must name exactly one tool of the upstream's own list, so the name the rules were matched on is the
         // tool that runs. Checked only for a call policy allows: a denied call is never forwarded anyway.
-        const unlisted = verdict.violated || historyLost !== null ? undefined : toolNameRefusal(await toolNamesFor(intent.params.tool), intent.params.tool);
+        // In monitor mode a finding is recorded on the receipt and the call goes on; in enforce mode it is denied.
+        const listing = verdict.violated || historyLost !== null ? undefined : toolListingFinding(await toolNamesFor(intent.params.tool), intent.params.tool);
+        const unlisted = listing !== undefined && listingEnforced ? TOOL_LISTING_REASONS[listing] : undefined;
         let decision: "allow" | "deny" = verdict.violated || adapterDeny || historyLost !== null || unlisted !== undefined ? "deny" : "allow";
 
         // The boundary, for a call policy has allowed. The exact request forwarded below is what an approval is bound to.
@@ -386,8 +403,10 @@ export function createMcpProxy(config: McpProxyConfig): McpProxy {
           if (!boundary.allow) decision = "deny";
         }
 
+        // A tool-list finding is recorded on the receipt's action, beside the tool name it is about.
+        const recorded = listing === undefined ? intent : { ...intent, params: { ...intent.params, tool_listing: listing } };
         const receipt = await buildPepReceipt(
-          { intent, policy: config.policy as never, principal: config.principal, realtimeResult: decision, now: config.now },
+          { intent: recorded, policy: config.policy as never, principal: config.principal, realtimeResult: decision, now: config.now },
           attester,
         );
         await config.onReceipt?.(receipt);

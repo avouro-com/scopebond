@@ -127,8 +127,7 @@ test("unknown tool or drifted revision is denied before dispatch under enforce; 
 });
 
 test("monitor mode records unknowns and forwards them", async () => {
-  // A tool the server lists but the pinned manifest does not know (the server changed since it was pinned).
-  const upstream = upstreamWith([...TOOLS, { name: "exfiltrate", description: "x", inputSchema: {} }]);
+  const upstream = upstreamWith();
   const { proxy, drafts } = build(upstream, { mode: "monitor" });
   await list(proxy);
   const res = await proxy.handle(call("exfiltrate", {}));
