@@ -317,6 +317,14 @@ export function mergeWorkspaceAllowances(local: Allowance[], delivered: unknown,
   return [...byId.values()].map((a) => (revokedIds.has(a.id) ? { ...a, state: "revoked" as const } : a));
 }
 
+/** `allowances` without the ones that came from the workspace: made by it, or named among the allowances it delivered (an
+ *  approved request arrives that way, under the id of the person's request). What is left when the workspace's grants expired
+ *  (policy-freshness.ts). The objects are the same ones, so a use counted on one is counted in `allowances` too. */
+export function withoutWorkspaceAllowances(allowances: Allowance[], delivered: unknown): Allowance[] {
+  const ids = new Set((Array.isArray(delivered) ? delivered : []).map((a) => (a && typeof a === "object" ? (a as { id?: unknown }).id : undefined)).filter((id): id is string => typeof id === "string"));
+  return allowances.filter((a) => a.created_by !== "workspace" && !ids.has(a.id));
+}
+
 export interface BlockedItem {
   id: string;
   at: string;

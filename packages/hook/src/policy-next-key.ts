@@ -27,6 +27,7 @@ import { isManaged, writeAtomic } from "./managed.js";
 import { baseKeyProblem, basePolicyKeys, setPinnedNextKeys, type PolicyKey } from "./policy-keys.js";
 import { verifySignedData } from "./pack-store.js";
 import { signatureMode, type SignatureMode } from "./policy-signature.js";
+import { policyLatched } from "./policy-freshness.js";
 
 export const NEXT_KEY_FORMAT = "scopebond:policy-next-key/v1";
 /** What a next-key signature covers: these bytes, then the canonical document without `signature`. */
@@ -117,9 +118,11 @@ export function useNextKey(dir: string, options: { keys?: PolicyKey[]; now?: Dat
 }
 
 /** The signature mode in force on this computer: `signatureMode` (the environment and cloud.json), or `enforce` when the next-key
- *  document pinned here says computers a workspace manages default to it and a workspace manages this one. */
+ *  document pinned here says computers a workspace manages default to it and a workspace manages this one, or when an answer
+ *  from the connected workspace has verified here before (the latch, policy-freshness.ts). */
 export function signatureModeAt(dir: string, connection: Partial<HookConnection> | null, env: NodeJS.ProcessEnv = process.env): SignatureMode {
   const mode = signatureMode(connection, env);
   if (mode === "enforce") return mode;
+  if (policyLatched(dir, connection)) return "enforce";
   return readNextKey(dir)?.managed_signature_mode === "enforce" && isManaged(dir) ? "enforce" : mode;
 }

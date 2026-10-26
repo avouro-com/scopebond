@@ -9,6 +9,7 @@ import type { HookConnection } from "./cloud.js";
 import { ago, readDeliveryState, waitingUntil, type DeliveryState } from "./delivery-state.js";
 import { cliCommand } from "./version.js";
 import { readSignatureState } from "./policy-signature.js";
+import { grantsExpired, grantsValidUntil } from "./policy-freshness.js";
 import { signatureModeAt } from "./policy-next-key.js";
 import { readMeta } from "./managed.js";
 
@@ -185,5 +186,11 @@ function signatureLines(dir: string, connection: Pick<HookConnection, "url">, li
   else {
     lines.push(`rules signature  REFUSED (${state.reason ?? "unknown"}, ${mode} mode): the rules in force stay`);
     problems.push(`the workspace's last rules answer was refused (${state.reason ?? "unknown"}); the rules in force stay until a correctly signed answer arrives`);
+  }
+  // Past the last freshness proof (policy-freshness.ts), the workspace's allowances let nothing through until a fresh answer.
+  const until = grantsValidUntil(dir);
+  if (until !== null && grantsExpired(dir)) {
+    lines.push(`workspace grants EXPIRED at ${until}: the rules stay in force; the workspace's allowances apply again after a signed rules check`);
+    problems.push(`no fresh signed answer from the workspace since ${until}: its allowances let nothing through until the next signed rules check`);
   }
 }
