@@ -10,7 +10,7 @@ import { homedir, hostname, release, uptime, userInfo } from "node:os";
 import { join } from "node:path";
 import {
   actOnBlocked, blockedQuestion, digestOf, markBlocked, queueRequest, readRequests, writeRequests, QUIET_BLOCK_DAYS, findClause, recordFatigue, hookVersion, loadPacks, readPackIndex, scrubSecrets, isSingleExecutable, isManaged, loadConnection, localActivity, MANAGED_DOC_FILE, endAllowance, noteUnresolvableHooks, readBlocked, readMeta, ruleSummary, ruleName, ruleTitle,
-  automaticHarnesses, checkConfigPath, dedupeHooks, duplicateHooks, refreshIfDue, readDeliveryState, writeDeliveryState, userHarnessFile, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
+  automaticHarnesses, checkConfigPath, dedupeHooks, duplicateHooks, refreshIfDue, readDeliveryState, writeDeliveryState, userHarnessFile, userHome, writeHarnessConfig, type ExplainPolicy, type Harness, type RecentBlockRecord,
 } from "@scopebond/hook";
 import { ensurePrivateDir } from "@scopebond/gateway/node";
 import { computerStatus, expectedHarnesses, missingHookEntries, runCycle, type CycleResult } from "./agent.js";
@@ -25,6 +25,7 @@ import { AGENT_LOG_ENV, autostartHealth, launcherIsCurrent, launcherPath, refres
 import { callAgent, startControl } from "./ipc.js";
 import { runSelfCheck } from "./selfcheck.js";
 import { integrationHealth } from "./integration-health.js";
+import { hookPins, noteTamper, repairHookPins, repairIntegrationIntent, tamperFindings, type HookPins, type TamperFinding } from "./hook-pin.js";
 import { startDiscoveryLoop } from "./discovery-loop.js";
 import { createInventoryReporter } from "./inventory.js";
 import { createHookActivityTracker } from "./hook-activity.js";
@@ -172,15 +173,30 @@ export interface AutostartRepair { health: () => { on: boolean; ok: boolean; det
  *  Scopebond hook (shown to the person); `duplicates`: those still running it more than once (an enabled plugin, which only
  *  the person can turn off; reported by the self-check). `autostart`: repaired, failed, or null when it needed nothing (or
  *  the person turned it off). */
-export interface SetupRepair { at: number; repaired: Harness[]; deduped: Harness[]; failed: Harness[]; duplicates: Harness[]; autostart: "repaired" | "failed" | null }
+export interface SetupRepair {
+  at: number; repaired: Harness[]; deduped: Harness[]; failed: Harness[]; duplicates: Harness[]; autostart: "repaired" | "failed" | null;
+  /** Coding agents whose hook entry was not exactly the one this agent writes, put back to it. */
+  pinned?: Harness[];
+  /** The tamper this repair found (hook-pin.ts), each with whether it is repaired now. */
+  tamper?: TamperFinding[];
+}
 
-/** Repair this computer's setup at once: the hook entry put back where a coding agent's settings lost it, a second copy of it
- *  taken out (the user settings keep theirs), and autostart that is on but broken started again (autostart the person turned
- *  off stays off). Each step is checked again afterwards. */
-export function repairSetup(harnesses: Harness[] = expectedHarnesses(), autostart: AutostartRepair | null = null, now = Date.now(), dir?: string): SetupRepair {
+/** Hook pins, or null when they could not be read. */
+const pinsOf = (harnesses: readonly Harness[], dir?: string): HookPins | null => { try { return hookPins(harnesses, { dir }); } catch { return null; } };
+
+/** Repair this computer's setup at once: an unreadable integration-intent file written again, the hook entry put back where a
+ *  coding agent's settings lost it or hold another command than the exact one this agent writes (`pins`: off under the
+ *  workspace's "hold" for an npm install, where the entry's version is not moved), a second copy of it taken out (the user
+ *  settings keep theirs), and autostart that is on but broken started again (autostart the person turned off stays off).
+ *  Each step is checked again afterwards. */
+export function repairSetup(harnesses: Harness[] = expectedHarnesses(), autostart: AutostartRepair | null = null, now = Date.now(), dir?: string, options: { pins?: boolean } = {}): SetupRepair {
+  const all = harnesses;
+  const before = pinsOf(all, dir);
+  const intentRepaired = before?.intent === "unreadable" && repairIntegrationIntent(dir ?? userHome());
   harnesses = automaticHarnesses(harnesses, dir);
   const home = homedir();
   const repaired = repairHookEntries(missingHookEntries(harnesses, dir), dir).map((r) => r.harness);
+  const pinned = options.pins === false ? [] : repairHookPins(pinsOf(harnesses, dir)?.tools ?? []);
   const deduped: Harness[] = [];
   for (const harness of harnesses) {
     try {
@@ -200,7 +216,8 @@ export function repairSetup(harnesses: Harness[] = expectedHarnesses(), autostar
   }
   const failed = missingHookEntries(harnesses, dir);
   const duplicates = harnesses.filter((h) => { try { return duplicateHooks(h, home, home) !== null; } catch { return false; } });
-  return { at: now, repaired: repaired.filter((h) => !failed.includes(h)), deduped, failed, duplicates, autostart: fixedAutostart };
+  const tamper = before ? tamperFindings(before, pinsOf(all, dir), now, intentRepaired) : [];
+  return { at: now, repaired: repaired.filter((h) => !failed.includes(h)), deduped, failed, duplicates, autostart: fixedAutostart, pinned, tamper };
 }
 
 /** The self-check items a setup repair can fix. */
@@ -455,6 +472,10 @@ export async function startService(options: ServiceOptions): Promise<Service> {
   const selfRepair = options.selfRepair ?? options.maintenance !== false;
   const autostart: AutostartRepair = options.autostart ?? { health: () => autostartHealth(options.dir), enable: () => enableAutostart(options.dir, agentCliPath()) };
   let lastRepair: SetupRepair | null = null;
+  // Tamper with the hook entries (or the integration-intent file) seen since the last self-check the workspace took: one
+  // finding per coding agent, sent with the next self-check and then cleared.
+  let tamperSeen: TamperFinding[] = [];
+  const noteFound = (found: readonly TamperFinding[]): void => { if (found.length) tamperSeen = noteTamper(tamperSeen, found); };
   // The agent's own renewal of a credential about to end: what the workspace answered, for which credential, and when.
   let renewal: { at: number; outcome: Awaited<ReturnType<typeof refreshIfDue>>; credential_id: string; expires_at: string | null } | null = null;
   /** Renew the credential silently when it ends within a week (the rules check renews it in its last 30 days; this learns why
@@ -476,9 +497,17 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     const at = Date.now();
     if (!asked && !selfRepair) return lastRepair;
     let done: SetupRepair;
-    try { done = repairSetup(expectedHarnesses(), thorough || asked ? autostart : null, at, options.dir); } catch (error) { log(`setup repair failed: ${(error as Error).message}`); return lastRepair; }
-    const acted = done.repaired.length || done.deduped.length || done.failed.length || done.autostart;
+    // An npm install under the workspace's "hold" keeps its entries' hook version: a differing entry is then reported only.
+    const pins = isSingleExecutable() || lastTarget?.policy !== "hold";
+    try { done = repairSetup(expectedHarnesses(), thorough || asked ? autostart : null, at, options.dir, { pins }); } catch (error) { log(`setup repair failed: ${(error as Error).message}`); return lastRepair; }
+    // Said once until reported: tamper that stays (a person's own disablement) is not logged again every cycle.
+    const fresh = (done.tamper ?? []).filter((f) => !tamperSeen.some((k) => k.tool === f.tool && k.repaired === f.repaired && f.deviations.every((d) => k.deviations.includes(d))));
+    noteFound(done.tamper ?? []);
+    const acted = done.repaired.length || done.deduped.length || done.failed.length || done.autostart || done.pinned?.length || fresh.length;
     for (const h of done.repaired) log(`repaired: the Scopebond hook entry was missing for ${h}; put back and checked again`);
+    for (const f of fresh) {
+      log(`tamper: ${f.tool === "integration_intent" ? "the integration-intent file could not be read" : `the Scopebond hook entry for ${f.tool} was not the one this agent writes`} (${f.deviations.join(", ")}); ${f.repaired ? "put back and checked again" : "not repaired"}`);
+    }
     for (const h of done.deduped) log(`repaired: the Scopebond hook ran more than once for ${h}; the second copy was taken out`);
     if (done.autostart) log(`autostart was on but broken: ${done.autostart === "repaired" ? "started again and checked" : "could not be repaired"}`);
     if (done.failed.length && !(lastRepair?.failed.length)) log(`could not put the Scopebond hook back for ${done.failed.join(", ")}`);
@@ -492,11 +521,15 @@ export async function startService(options: ServiceOptions): Promise<Service> {
     heal(true);
     try { await renewCredential(); } catch { /* the check says so */ }
     connection = loadConnection(options.dir) ?? connection;
-    const run = () => runSelfCheck(options.dir, connection, expectedHarnesses(), agentVersion(), { fetchImpl: options.fetchImpl });
+    const run = async () => {
+      const checked = await runSelfCheck(options.dir, connection, expectedHarnesses(), agentVersion(), { fetchImpl: options.fetchImpl, tamper: tamperSeen });
+      if (checked?.integrity_reported) tamperSeen = [];
+      return checked;
+    };
     const first = await run();
     if (!selfRepair || !first || first.ok || !first.checks.some((c) => !c.ok && SETUP_CHECKS.has(c.id))) return first;
     const fixed = heal(true);
-    if (!fixed || !(fixed.repaired.length || fixed.deduped.length || fixed.autostart === "repaired")) return first;
+    if (!fixed || !(fixed.repaired.length || fixed.deduped.length || fixed.autostart === "repaired" || fixed.pinned?.length)) return first;
     log("self-check: repaired what it found and checked again");
     return run();
   };
@@ -615,7 +648,11 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       // workspace hears of, before the repair below (the actions in between ran unchecked either way).
       const outage = noteUnresolvableHooks(options.dir, harnesses.filter((h) => h === "codex" || h === "cursor"));
       if (outage.recorded.length) log(`hook entry cannot start for ${outage.recorded.join(", ")}: kept as a gap for the workspace`);
+      // Upkeep rewrites entries of its own; any that differed from the exact entry beforehand is noted as tamper first, so
+      // the self-check reports it even when upkeep is what put it right.
+      const pinsBefore = pinsOf(harnesses, options.dir);
       result.hookEntries = maintainHookEntries(harnesses, target?.policy !== "hold", process.platform, options.dir);
+      if (pinsBefore) noteFound(tamperFindings(pinsBefore, pinsOf(harnesses, options.dir), Date.now()));
       for (const change of result.hookEntries) log(`${change.reason}: ${change.file}`);
       // The npm install follows the workspace's `agent`; the signed install its `native_agent` only (updateTarget).
       const newer = updateTarget(target, kind, current);
