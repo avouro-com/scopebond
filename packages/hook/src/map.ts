@@ -70,6 +70,10 @@ export interface Mapped {
   /** On a shell command's own `shell.exec`: what a person is shown when a rule they may act on blocks it, and all an
    *  allowance for it is keyed on (override.ts), worked out only when asked for. Not part of the signed intent. */
   shown?: () => ShownCommand;
+  /** On a file write whose targets the command does not name (`tar -x`, `unzip`, `patch`, `git apply`): the folder they land
+   *  in, absolute when known (`~` for the home folder). The runtime refuses such a write in the home folder, or in or beside
+   *  Scopebond's own folder or a coding tool's settings folder. Not part of the signed intent. */
+  unknownWritesIn?: string;
 }
 
 /** One simple command as a person judges it: the program and its arguments as the shell reads them (quotes gone, a trailing
@@ -171,6 +175,9 @@ function pathIntents(action: "file.read" | "file.write", path: string, source: s
 // keeps shell expansion from hiding a protected file from the path guard.
 const PROTECTED_SAMPLES = [
   ".scopebond/agent.key", ".scopebond/attester.key", ".scopebond/policy.json", ".scopebond/cloud.json",
+  // every other file Scopebond keeps in its folder
+  ".scopebond/agent.json", ".scopebond/rules.json", ".scopebond/allowances.json", ".scopebond/trusted-projects.json",
+  ".scopebond/managed-rules.json", ".scopebond/receipts.db", ".scopebond/packs/index.json", ".scopebond/engine/current.json",
   "agent.key", "attester.key", "server.key", "cert.pem", "id.p12", "id.pfx",
   ".env", ".env.local", ".env.production", ".envrc",
   ".ssh/id_rsa", ".ssh/id_ed25519", ".aws/credentials", ".npmrc", ".pypirc", ".netrc", ".git-credentials",
@@ -281,6 +288,13 @@ function protectedCandidate(word: string): string | undefined {
     }
     if (m && m.test(sample)) return sample;
   }
+  // A folder segment that is, or could match, Scopebond's own folder (`.scopebond/a?ent.json`, `.scope?ond/x`): whatever the rest
+  // names, it is inside that folder, every file of which the floor guards.
+  for (let i = 0; i < segs.length - 1; i++) {
+    const seg = segs[i];
+    if (segs.slice(i + 1).includes("..")) continue;
+    if (seg.toLowerCase() === ".scopebond" || (UNRESOLVED.test(seg) && /[^/]/.test(seg.replace(EXPANSION, "")) && wordMatcher(seg).test(".scopebond"))) return ".scopebond/policy.json";
+  }
   return undefined;
 }
 
@@ -354,7 +368,7 @@ const VALUE_PARAMETER = new Set(["-va", "-val", "-valu", "-value"]);
 // agent removing Scopebond's files and their evidence. Any other delete stays a plain shell.exec, as before.
 const DELETERS = new Set(["rm", "rmdir", "rd", "del", "erase", "remove-item", "ri", "trash", "trash-put"]);
 // The signed installer's folder (`%LOCALAPPDATA%\Programs\Scopebond`, `%ProgramFiles%\Scopebond`) holds the hook's program.
-const ALWAYS_PROTECTED = /(?:^|[\\/])(?:\.scopebond|\.claude|\.cursor|\.codex|\.copilot[\\/](?:hooks|settings\.json|mcp-config\.json)|\.github[\\/](?:hooks|copilot[\\/]settings(?:\.local)?\.json)|\.husky|\.githooks|\.mcp\.json|\.git[\\/]hooks|(?:programs|program files(?: \(x86\))?|progra~\d|[%$]\{?(?:env:)?program[^\\/]*)[\\/](?:scopebond|scopeb~\d))(?:$|[\\/:])/i;
+const ALWAYS_PROTECTED = /(?:^|[\\/])(?:\.scopebond|\.claude|\.cursor|\.codex|\.copilot[\\/](?:hooks|settings\.json|mcp-config\.json)|\.github[\\/](?:hooks|copilot[\\/]settings(?:\.local)?\.json)|\.husky|\.githooks|\.mcp\.json|\.git[\\/]hooks|(?:programs|program files(?: \(x86\))?|progra~\d|[%$]\{?(?:env:)?program[^\\/]*)[\\/](?:scopebond|scopeb~\d)|(?:lib|npm|global(?:[\\/]\d+)?)[\\/]node_modules[\\/]@scopebond[\\/](?:hook|agent))(?:$|[\\/:])/i;
 // Removing or renaming a folder takes everything inside it. A folder that holds an always-protected place is recorded as a
 // write of that place, so the always-on floor stops the removal as it would a change to the place itself. Each entry is a folder
 // and the protected place inside it (empty when the folder itself is protected): this project's (in its working folder or above)
@@ -751,9 +765,11 @@ function linkTargetOf(prog: string, args: string[], operands: string[]): string 
  *  positive (a non-protected operand) is a harmless extra receipt the starter policy
  *  allows. `unknownTarget` is set when the command writes files its text does not
  *  name (`patch`, `git apply`, `tar x`, `unzip`). */
-function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: Mapped[]; unknownTarget: boolean } {
+function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: Mapped[]; unknownTarget: boolean; unknownIn?: string } {
   const ops: Mapped[] = [];
   let unknownTarget = false;
+  // The folder the writes the text does not name land in, when an option names one (`tar -C d`, `unzip -d d`, `git -C d apply`).
+  let unknownIn: string | undefined;
   const prog = canonProgram(sc.program);
   const read = (w: string | undefined) => { if (w !== undefined && isPathWord(w)) ops.push(...fileIntent("file.read", w, dir, cwd)); };
   const write = (w: string | undefined) => {
@@ -891,7 +907,12 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
       // `git show REV:path` prints that file's content from history.
       // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, and `[^:]*` stops at the colon that must follow it
       for (const w of a) { const m = /^(?:[^-:][^:]*)?:(?:\d:)?(.+)$/.exec(w); if (m && !/^[a-z][a-z0-9+.-]*:\/\//i.test(w)) read(m[1]); }
-    } else if (sub === "apply" || sub === "am") unknownTarget = true;
+    } else if (sub === "apply" || sub === "am") {
+      unknownTarget = true;
+      if (git.dir !== undefined) unknownIn = git.dir;
+      // `git apply --directory=<root>` writes under <root>, inside the folder git runs in.
+      a.forEach((w, k) => { const d = w === "--directory" ? a[k + 1] : w.startsWith("--directory=") ? w.slice(12) : undefined; if (d !== undefined) unknownIn = unknownIn === undefined ? d : unknownIn + "/" + d; });
+    }
   } else if (prog === "find") {
     // `find DIR … -exec cat {} +` reads DIR's files; `-fprint F` writes F.
     const starts: string[] = [];
@@ -930,18 +951,21 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
   } else if (prog === "patch") {
     // The file a patch changes is named inside the patch; an explicit operand is written.
     unknownTarget = true;
+    args.forEach((w, k) => { if (w === "-d" || w === "--directory") unknownIn = args[k + 1]; else if (w.startsWith("--directory=")) unknownIn = w.slice(12); else if (/^-d./.test(w)) unknownIn = w.slice(2); });
     write(operands[0]);
   } else if ((prog === "tar" || prog === "bsdtar") && (args.some((w) => w === "--extract" || w === "--get" || /^-[A-Za-z]*x/.test(w)) || /^[A-Za-z]*x[A-Za-z]*$/.test(args[0] ?? ""))) {
     unknownTarget = true;
-    args.forEach((w, k) => { if (w === "-C" || w === "--directory") write(args[k + 1]); else if (w.startsWith("--directory=")) write(w.slice(12)); });
+    args.forEach((w, k) => {
+      if (w === "-C" || w === "--directory") { write(args[k + 1]); unknownIn = args[k + 1]; } else if (w.startsWith("--directory=")) { write(w.slice(12)); unknownIn = w.slice(12); }
+    });
     operands.forEach(read);
   } else if (prog === "unzip" && !args.some((w) => /^-[ltvZpcz]$/.test(w))) {
     unknownTarget = true;
-    args.forEach((w, k) => { if (w === "-d") write(args[k + 1]); });
+    args.forEach((w, k) => { if (w === "-d") { write(args[k + 1]); unknownIn = args[k + 1]; } });
     read(operands[0]);
   } else if (/^7z[arz]?$/.test(prog) && /^[xe]$/.test(operands[0] ?? "")) {
     unknownTarget = true;
-    args.forEach((w) => { if (/^-o./.test(w)) write(w.slice(2)); });
+    args.forEach((w) => { if (/^-o./.test(w)) { write(w.slice(2)); unknownIn = w.slice(2); } });
     read(operands[1]);
   } else if (prog === "cpio" && args.some((w) => w === "--extract" || /^-[A-Za-z]*i/.test(w))) {
     unknownTarget = true;
@@ -1052,7 +1076,7 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     else if (r.op === "<>") { read(r.target); write(r.target); }
     else read(r.target);
   }
-  return { ops, unknownTarget };
+  return { ops, unknownTarget, ...(unknownIn !== undefined ? { unknownIn } : {}) };
 }
 
 // The hook's own CLI run by the agent to switch itself off or re-scope itself
@@ -1552,6 +1576,9 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
     // reading already understood, only a reference to Scopebond itself counts, not the word anywhere.
     const names = windowsReading ? NAMES_SCOPEBOND_ITSELF : /scopebond/i;
     if (names.test(sc.raw) && !(searchReading && mentionsOnlyInSearch(sc.raw, names))) opaque.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
+    // A place the always-on protection guards that it names may be read or changed by it: recorded as both, so the floor
+    // judges it as it would the command written out (`{cp,a,~/.claude/settings.json}`, a function that changes it).
+    if (!windowsReading) opaque.push(...mentionedPlaces(sc.raw, dir, cwd));
     return opaque;
   }
   const push = parseGitPush(sc, gitLineConfigs);
@@ -1567,7 +1594,7 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
       return { intent: { action_type: "git.push", params }, evaluated: true, source: "shell" };
     });
   }
-  const { ops: files, unknownTarget } = fileOpsFromShell(sc, dir, cwd);
+  const { ops: files, unknownTarget, unknownIn } = fileOpsFromShell(sc, dir, cwd);
   // The hook disabling itself is a write to its own policy, which the starter protects.
   if (selfDisable(sc)) files.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
   // PowerShell reaches files through .NET as well as cmdlets (`[IO.File]::WriteAllText('.scopebond\policy.json', …)`,
@@ -1603,11 +1630,78 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
   // cannot be judged here: its writes are recorded as a file.write with no path, not
   // evaluated — observed in normal mode, denied by strict mode (like an apply_patch
   // with no recognizable path).
-  if (unknownTarget) files.push({ intent: { action_type: "file.write", params: { path: "" } }, evaluated: false, source: "shell" });
+  if (unknownTarget) files.push({ intent: { action_type: "file.write", params: { path: "" } }, evaluated: false, source: "shell", unknownWritesIn: unknownWritesFolder(unknownIn, dir, cwd) });
   return [exec, ...targets, ...files];
 }
 
+/** The folder a command's unnamed writes land in (`Mapped.unknownWritesIn`): the folder an option names, else the one the command
+ *  runs in, inside `cwd` unless it starts elsewhere (`~`, `/`, a drive). "." when neither is known. */
+function unknownWritesFolder(named: string | undefined, dir: string, cwd?: string): string {
+  const word = named === undefined ? "" : expandHome(trimChars(named, "\"'"));
+  const at = word === "" ? dir : STARTS_ELSEWHERE.test(word) ? word : [dir, word].filter(Boolean).join("/");
+  return runFolder(at, cwd) || ".";
+}
+
 const CD = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
+
+/** Where a text splits into words that may name a place: blanks, quotes, separators, brackets, and the operators that join or
+ *  assign strings. */
+const MENTION_SPLIT = /[\s'"`;,(){}|&<>=+]+/;
+const MAX_MENTIONS = 16;
+/** The places the always-on protection guards that `text` names, read and written: for a command the mapper cannot read word by
+ *  word (a program known only at run time, a .NET call on an object, a program started through another), which may do either. */
+function mentionedPlaces(text: string, dir: string, cwd?: string): Mapped[] {
+  const out: Mapped[] = [];
+  const seen = new Set<string>();
+  for (const word of text.slice(0, CODE_SCAN_LIMIT).split(MENTION_SPLIT)) {
+    if (word === "" || seen.has(word) || seen.size >= MAX_MENTIONS) continue;
+    if (!GUARDED.test(normPath(asShellVariables(expandHome(word))))) continue;
+    seen.add(word);
+    out.push(...fileIntent("file.read", word, dir, cwd), ...fileIntent("file.write", word, dir, cwd));
+  }
+  return out;
+}
+
+/** PowerShell's programs that start another program or script with what they are given (`Start-Process cmd -ArgumentList …`). */
+const PS_LAUNCHERS = new Set(["start-process", "saps", "start", "invoke-item", "ii", "start-job", "sajb", "invoke-command", "icm", "start-threadjob"]);
+/** A .NET method called on an object (`(Get-Item f).Delete()`, `$f.MoveTo(…)`), which reaches files no cmdlet word names. */
+const PS_METHOD_CALL = /(?:\)|\$[\w:]+|\])\s*\.\s*[A-Za-z_]\w*\s*\(/;
+/** String joins that build a word PowerShell only knows once it runs: `'~/.scope'+'bond'`, `('a','b') -join ''`. */
+const PS_CONCAT = /(['"])\s*\+\s*(['"])/g;
+const PS_JOIN_LIST = /(['"])\s*,\s*(['"])/g;
+
+/** The names a simple command defines as commands of its own: a shell function (`f(){ …; }`, `function f`), an alias (`alias
+ *  z=cat`, PowerShell's `Set-Alias z Get-Content`), lower case. */
+function namesDefined(sc: SimpleCommand): string[] {
+  if (sc.opaque) {
+    // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, each class matches distinct characters
+    const m = /^\s*(?:function\s+)?([A-Za-z_][\w.:-]*)\s*\(\s*\)/.exec(sc.raw) ?? /^\s*function\s+([A-Za-z_][\w.:-]*)/.exec(sc.raw);
+    return m ? [canonProgram(m[1])] : [];
+  }
+  const prog = canonProgram(sc.program);
+  if (prog === "function") return sc.argv[0] ? [canonProgram(sc.argv[0].replace(/[(){].*$/, ""))] : [];
+  if (prog === "alias") return sc.argv.filter((a) => a.includes("=")).map((a) => canonProgram(a.slice(0, a.indexOf("="))));
+  if (prog === "set-alias" || prog === "new-alias" || prog === "sal" || prog === "nal") {
+    // eslint-disable-next-line security/detect-unsafe-regex -- linear: anchored, a short fixed chain of optionals
+    const named = sc.argv.findIndex((a) => /^-n(?:a(?:m(?:e)?)?)?$/i.test(a));
+    const name = named >= 0 ? sc.argv[named + 1] : sc.argv.find((a) => !a.startsWith("-"));
+    return name ? [canonProgram(name)] : [];
+  }
+  return [];
+}
+
+/** What a PowerShell call may reach that its words do not show: a place the always-on protection guards, named in a string it
+ *  builds (`$p='~/.scope'+'bond/…'`), handed to a program it starts (`Start-Process`), or reached through a .NET method on an
+ *  object (`(Get-Item f).Delete()`). Recorded as a read and a write of each such place (fail closed). */
+function powerShellReach(src: string, commands: SimpleCommand[], cwd?: string): Mapped[] {
+  const text = src.slice(0, CODE_SCAN_LIMIT);
+  const concatenated = text.replace(PS_CONCAT, "");
+  const joined = /-join\b/i.test(text) ? concatenated.replace(PS_JOIN_LIST, "") : concatenated;
+  const builds = joined !== text;
+  const launches = commands.some((c) => !c.opaque && PS_LAUNCHERS.has(canonProgram(c.program)));
+  if (!builds && !launches && !PS_METHOD_CALL.test(text)) return [];
+  return mentionedPlaces(joined, "", cwd);
+}
 
 // Folders whose contents a read rule protects as a whole: Scopebond's own and the credential folders.
 const PROTECTED_READ_FOLDERS = [".scopebond", ".ssh", ".aws", ".kube", ".docker", ".azure", ".gnupg", ".config/gcloud", ".config/gh"];
@@ -1751,8 +1845,13 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
     let elsewhere: Array<{ dir: string; secret: boolean }> = [];
     const vars: Variables = new Map();
     const out: Mapped[] = [];
-    for (const sc of list) {
-      const mapped = withDeleteScope(mapSimpleCommand(sc, dir, cwd, filesOnly, piped, scan.gitConfigs.get(sc), filesOnly || plainPowerShell, shownDir), deletes.get(sc), cwd, destructiveForm(sc, dir, cwd));
+    // Names the call defines as commands of its own (a shell function, an alias): what such a name runs is not the word written.
+    const defined = new Set<string>();
+    for (const given of list) {
+      // A call of a function or alias the call defined is read as a command whose program is only known at run time.
+      const sc: SimpleCommand = !given.opaque && defined.has(canonProgram(given.program)) ? { ...given, opaque: true } : given;
+      for (const name of namesDefined(given)) defined.add(name);
+      const mapped = withDeleteScope(mapSimpleCommand(sc, dir, cwd, filesOnly, piped, scan.gitConfigs.get(given), filesOnly || plainPowerShell, shownDir), deletes.get(given), cwd, destructiveForm(sc, dir, cwd));
       const kept = filesOnly ? mapped.filter(isFile) : mapped;
       out.push(...kept);
       // A program run in a protected folder (after a `cd` there) reads there, whatever it names: a read of the folder.
@@ -1806,6 +1905,10 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
     return out;
   };
   const out = walk(commands, false);
+  if (dialect === "powershell") {
+    const have = new Set(out.filter(isFile).map(key));
+    for (const m of powerShellReach(src, commands, cwd)) if (!have.has(key(m))) { have.add(key(m)); out.push(m); }
+  }
   // A coding agent started with its config folder moved loads none of this computer's hooks: a switch-off. A part of the call
   // that does not parse is read again with its quote closed, so an unclosed quote cannot hide the agent; a program known only at
   // run time (`$AGENT`, `eval "$CMD"`) is not taken for one (it is recorded with an empty program, which safe-shell judges).
