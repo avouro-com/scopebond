@@ -68,7 +68,7 @@ export { inspectBudgetExport, loadBudgetExport, localBudgetOf, BUDGET_EXPORT_TYP
 export { inspectExport, loadPolicyExport, policyScopeDigest, policyBuilds, POLICY_SCOPE_DOMAIN, LOADED_POLICY_FILE } from "./policy-load.js";
 export {
   inspectManaged, compileManaged, managedEnforce, enforcedRuleIds, installManaged, restoreLocal, isManaged, readMeta, digestRules, digestManaged, ruleReport,
-  MANAGED_RULE_IDS, OPTIONAL_RULE_IDS, NEVER_OFF_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE, RULE_OF_CLAUSE, floorDocument, writeAtomic,
+  MANAGED_RULE_IDS, OPTIONAL_RULE_IDS, NEVER_OFF_RULE_IDS, MANAGED_DOC_FILE, MANAGED_META_FILE, TRUSTED_ANSWER_FILE, TRUST_CHECK_FILE, RULE_OF_CLAUSE, floorDocument, writeAtomic,
   offRuleIds, packRuleAdjustments, packRuleAdjustmentsAt, packRulesOf, managedSetting,
   inspectToolSettings, digestToolSettings, toolSettingsMark, TOOL_SETTINGS_TYPE, TOOL_SETTINGS_HARNESSES, TOOL_SETTINGS_LISTS, MCP_SERVER_NAME,
   MAX_TOOL_SETTINGS_ENTRIES, MAX_TOOL_SETTINGS_ENTRY, ANSWER_LENGTHS,
@@ -95,6 +95,7 @@ export { checkPolicySignature, checkToolSettingsSignature, checkPacksSignature, 
 export { policyKeys, basePolicyKeys, setPinnedNextKeys, policyKeyProblems, PINNED_POLICY_KEYS, POLICY_KEYS_ENV, type PolicyKey } from "./policy-keys.js";
 export { recordFatigue, readFatigue, fatigueHeaderValue, localDay, FATIGUE_FILE, FATIGUE_HEADER, type FatigueKind, type FatigueCounts } from "./fatigue.js";
 export { checkFreshness, checkRevocation, decodeFreshnessHeader, encodeFreshnessHeader, freshnessDigestFor, grantsExpired, grantsValidUntil, policyLatched, sha256Hex, FRESHNESS_HEADER, FRESHNESS_MAX_MS, REVOCATION_DIGEST, type FreshnessCheck, type FreshnessContext, type RevocationContext, type StoredFreshness, type StoredLatch } from "./policy-freshness.js";
+export { assertTrusted, checkTrust, hasTrustRecord, packsSetByWorkspace, readTrustRecord, rebindTrust, recordTrustedAnswer, trustVerifications, PolicyTrustError, type TrustCheck, type TrustRecord, type TrustedFile } from "./policy-trust.js";
 export { withoutWorkspaceAllowances } from "./allowances.js";
 export { checkNextKey, pinNextKey, readNextKey, useNextKey, signatureModeAt, nextKeySigningInput, NEXT_KEY_FORMAT, NEXT_KEY_SIGNATURE_DOMAIN, NEXT_KEY_FILE, type NextKeyDocument } from "./policy-next-key.js";
 export {

@@ -80,6 +80,7 @@ import { ensureDurableRuntime, pinnedCliPath, isEphemeralPath } from "./runtime-
 import { cliCommand, hookCommand, hookVersion } from "./version.js";
 import { withHookVersion } from "./workspace-fetch.js";
 import { activatePacks, checkPackText, installPack, loadPacks, packsDir, removePack } from "./pack-store.js";
+import { checkTrust, packsSetByWorkspace, rebindTrust, PolicyTrustError } from "./policy-trust.js";
 import { describeLocalPacks, loadLocalPacks } from "./pack-local.js";
 import { packTestLines, testPackFiles } from "./pack-test.js";
 import { exampleRecord, intelShowJson, intelShowLines, previewNextUpload } from "./intel-show.js";
@@ -422,8 +423,16 @@ async function runPreToolUse(mapper: (input: Record<string, unknown>) => Mapped[
     // No Scopebond setup here at all (no policy): for Copilot that is the cloud agent's sandbox, so say what to do about it.
     if (harness === "copilot" && configFolder !== undefined && !existsSync(join(configFolder, "policy.json"))) deny(COPILOT_NOT_SET_UP);
     recordHookError("fail_closed", (error as Error).message);
+    // Workspace rules that no longer match their signed answer: this call is refused, and they are fetched again now.
+    if (error instanceof PolicyTrustError && configFolder !== undefined) await refetchAfterMismatch(configFolder);
     deny(`Scopebond hook failed closed: ${(error as Error).message}. Repair: ${repairFor(error)}.`);
   }
+}
+
+/** After a call was refused because the workspace's rules here no longer match their signed answer (policy-trust.ts): run the
+ *  rules check now, capped like the five-minute one, so the rules are installed again before the next call. Never throws. */
+async function refetchAfterMismatch(dir: string): Promise<void> {
+  try { await syncIfDue(dir, () => syncOptionsFor(dir)); } catch { /* checked again on the next call */ }
 }
 
 /** Claude Code events other than PreToolUse: session start and end, and the after-action
@@ -658,6 +667,7 @@ async function runCursor(): Promise<void> {
   } catch (error) {
     permission = "deny";
     recordHookError("fail_closed", (error as Error).message);
+    if (error instanceof PolicyTrustError && configDir !== undefined) await refetchAfterMismatch(configDir);
     message = `Scopebond hook failed closed: ${(error as Error).message}. Repair: ${repairFor(error)}.`;
   } finally {
     // Release the SQLite handles on every path: an unclosed writer leaves its
@@ -1046,8 +1056,11 @@ async function runRules(args: string[]): Promise<void> {
         requireInteractive("rules", args);
         rules.local_overrides = { ...(rules.local_overrides ?? {}), [id]: verb };
         const agentKid = createSigner({ privateKeyPem: readFileSync(join(dir, "agent.key"), "utf8") }).kid;
+        // The policy recompiled from the signed answer in force stays covered by it, when the files matched it before.
+        const trusted = checkTrust(dir);
         saveRules(dir, rules);
         replaceFile(join(dir, "policy.json"), `${JSON.stringify(compileManaged(rules, doc, agentKid), null, 2)}\n`);
+        if (trusted.applies && trusted.ok) rebindTrust(dir, ["policy.json"]);
         console.log(`✓ ${verb === "enforce" ? `${id} now blocks on this computer` : `${id} now records on this computer, without blocking`} (your workspace allows changes on computers)`);
         await reportRules(dir);
         process.exit(0);
@@ -1527,11 +1540,15 @@ async function runRecover(args: string[]): Promise<void> {
   process.exitCode = result.failed || result.pending ? 1 : 0;
 }
 
+/** Why `packs add` and `packs remove` refuse where the workspace's signed answer names the packs (policy-trust.ts). */
+const PACKS_SET_BY_WORKSPACE = "Your Scopebond workspace sets the rule packs on this computer; an owner or admin changes them in the workspace.";
+
 async function runFlush(): Promise<void> {
   const dir = resolveConfigDir(process.cwd());
   if (!loadConnection(dir)) { console.error(`not connected to a workspace; run \`${cliCommand("connect <workspace-url> <enrollment>")}\` first`); process.exit(1); }
   // No time limit here, so the queue waits as long as the agent's flush does for another process's lock.
-  const runtime = createHookRuntime({ ...runtimePaths(dir), queueBusyTimeoutMs: 15_000 });
+  // Delivery decides nothing, so it runs whatever the state of the rules (policy-trust.ts).
+  const runtime = createHookRuntime({ ...runtimePaths(dir), queueBusyTimeoutMs: 15_000, verifyTrust: false });
   const before = runtime.exporter?.status().lastSuccessAt ?? null;
   // First, anything the queue never got (a failed queue write, an evaluation that was cut off).
   await runtime.repair();
@@ -2458,6 +2475,7 @@ async function runPacks(args: string[]): Promise<void> {
       return;
     }
     requireInteractive("packs add", args);
+    if (packsSetByWorkspace(dir)) { console.error(PACKS_SET_BY_WORKSPACE); process.exit(1); }
     const result = installPack(dir, text);
     if (!result.ok) { console.error(`not added: ${result.message}`); process.exit(1); }
     console.log(`added ${result.pack.id}@${result.pack.version}; it is in force for 30 days unless this computer checks in again.`);
@@ -2465,6 +2483,7 @@ async function runPacks(args: string[]): Promise<void> {
   }
   if (sub === "remove" && target) {
     requireInteractive("packs remove", args);
+    if (packsSetByWorkspace(dir)) { console.error(PACKS_SET_BY_WORKSPACE); process.exit(1); }
     if (!removePack(dir, target)) { console.error(`no pack ${target} here`); process.exit(1); }
     console.log(`removed ${target}`);
     return;

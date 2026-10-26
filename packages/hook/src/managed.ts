@@ -53,6 +53,11 @@ import type { PackRuleMode } from "./pack-rules.js";
 export const MANAGED_DOC_FILE = "managed-rules.json";
 export const MANAGED_META_FILE = "managed-meta.json";
 export const PREVIOUS_POLICY_FILE = "policy.previous.json";
+/** The verified workspace answer the rules in force came from, kept as received with the hashes of the files it explains
+ *  (policy-trust.ts). */
+export const TRUSTED_ANSWER_FILE = "managed-answer.json";
+/** The cached result of checking those files against it (policy-trust.ts). */
+export const TRUST_CHECK_FILE = "managed-trust-check.json";
 
 export const MANAGED_RULE_IDS = ["force-push-protected", "push-protected", "destructive-shell", "secret-read", "ci-config-write", "network-egress"] as const;
 type ManagedRuleId = (typeof MANAGED_RULE_IDS)[number];
@@ -608,6 +613,9 @@ export interface ManagedMeta {
    *  the person was told (once, with the next decision; `status` says it until the computer signs in again). */
   rules_dropped_at?: string | null;
   rules_dropped_told?: boolean | null;
+  /** When a hook call found the workspace's rules on this computer no longer matching the signed answer they came from, and
+   *  why (policy-trust.ts). The next rules check is then due at once; a check that installs the rules again clears it. */
+  policy_trust?: { at: string; reason: string } | null;
   /** The last signed pack list the workspace named (pack-sync.ts): when, its digest, whether every pack in it is in the cache,
    *  and what went wrong when one is not. `failed` names each pack that could not be fetched or checked (the version named,
    *  why, and the version of it still in force until when). A `304` rules check renews every other pack. */
@@ -662,6 +670,8 @@ export function restoreLocal(dir: string, agentKid: string): void {
   if (existsSync(policyPath)) copyFileSync(policyPath, join(dir, PREVIOUS_POLICY_FILE));
   writeAtomic(policyPath, `${JSON.stringify(compile(local, agentKid), null, 2)}\n`);
   rmSync(join(dir, MANAGED_DOC_FILE), { force: true });
+  // The workspace's signed answer no longer explains anything here (policy-trust.ts).
+  for (const name of [TRUSTED_ANSWER_FILE, TRUST_CHECK_FILE]) rmSync(join(dir, name), { force: true });
 }
 
 export type RuleSource = "workspace" | "computer";
