@@ -592,6 +592,12 @@ export interface ManagedMeta {
   policy_issued_at?: string | null;
   /** The workspace id `policy_issued_at` belongs to. */
   policy_issued_workspace?: string | null;
+  /** Set when an answer from this workspace first verified (policy-freshness.ts): from then on this computer accepts only
+   *  signed answers from it, whatever the signature mode says. */
+  policy_latch?: { workspace: string; at: string; key_id: string } | null;
+  /** The newest verified freshness proof (policy-freshness.ts): for which ETag (its sha256), when it was issued, and until when
+   *  the workspace's allowances may be relied on. Past `valid_until` they stop allowing anything until a fresh answer. */
+  policy_freshness?: { workspace: string; etag_digest: string; issued_at: string; valid_until: string; key_id: string } | null;
   /** The grants digest (policy-signature.ts `digestGrants`) of the document in force when `etag` was saved. An ETag saved
    *  without it came from a version that did not compare grants at the same revision, so it is not sent (`if-none-match`):
    *  a revocation that version missed is fetched again. */

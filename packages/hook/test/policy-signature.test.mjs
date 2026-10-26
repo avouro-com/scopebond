@@ -81,7 +81,8 @@ test("a valid signature verifies, installs, and is reported as verified", async 
   try {
     const { outcome } = await sync(h, signed(doc(1, { "push-protected": { mode: "monitor" } })));
     assert.deepEqual(outcome, { state: "applied", revision: 1 });
-    assert.deepEqual(status(h).policy_signature, { mode: "dual", last: "verified", reason: null });
+    // A verified answer latches the computer to signed answers from this workspace: enforce from now on.
+    assert.deepEqual(status(h).policy_signature, { mode: "enforce", last: "verified", reason: null });
     assert.equal(readMeta(h.dir).policy_issued_at, T(15));
     assert.ok(describeDelivery(h.dir, { url: "https://cloud.example.test" }).lines.some((l) => /rules signature\s+verified/.test(l)));
     // The raw 32-byte key form verifies the same signature.
@@ -130,7 +131,8 @@ for (const mode of ["enforce", "dual"]) {
         assert.ok(isManaged(h.dir), "never back to no rules, nor to the computer's own rules");
         if (inspected) { assert.equal(outcome.reason, reason); return; } // refused by the document check, before the signature
         assert.equal(outcome.signature, reason, outcome.message);
-        assert.deepEqual(status(h).policy_signature, { mode, last: "refused", reason });
+        // Latched by the signed revision 1 (policy-freshness.ts): enforce in either configured mode.
+        assert.deepEqual(status(h).policy_signature, { mode: "enforce", last: "refused", reason });
         assert.ok(describeDelivery(h.dir, { url: "https://cloud.example.test" }).problems.some((p) => p.includes(reason)));
         // The workspace is told: a rejected confirmation, in the reasons it already reads.
         const ack = calls.find((c) => c.url.endsWith("/v1/policy/ack"));

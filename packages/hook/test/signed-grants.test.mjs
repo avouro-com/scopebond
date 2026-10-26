@@ -174,10 +174,15 @@ test("enforce: a signed document carrying allowances without a grants signature 
     assert.equal(carrying.outcome.state, "refused");
     assert.equal(carrying.outcome.signature, "unsigned_policy");
     assert.equal(installed(h).revision, 1);
-    // Dual mode accepts it, as it accepts an unsigned document.
+    // Once latched by a verified answer, dual mode refuses it too.
     delete process.env.SCOPEBOND_POLICY_SIGNATURE_MODE;
-    assert.deepEqual((await sync(h, signed(doc(2, { allowances: [delivered()] }), { grants: false, issuedAt: T(16) }))).outcome, { state: "applied", revision: 2 });
+    assert.equal((await sync(h, signed(doc(2, { allowances: [delivered()] }), { grants: false, issuedAt: T(16) }))).outcome.signature, "unsigned_policy");
   } finally { rmSync(h.dir, { recursive: true, force: true }); }
+  // Dual mode on a computer not latched yet accepts it with the first signed answer, as it accepts an unsigned document.
+  const fresh = connected();
+  try {
+    assert.deepEqual((await sync(fresh, signed(doc(2, { allowances: [delivered()] }), { grants: false, issuedAt: T(16) }))).outcome, { state: "applied", revision: 2 });
+  } finally { rmSync(fresh.dir, { recursive: true, force: true }); }
 });
 
 test("checkGrantsSignature: verified for the workspace's grants; the digest covers all four lists", () => {

@@ -18,6 +18,9 @@
 // must verify against a pinned workspace key (policy-signature.ts). In the default `dual` mode an unsigned answer is still
 // accepted and recorded as `unsigned_policy`; in `enforce` mode it is refused, and so are a 204 and a 401, which carry no
 // signature: the rules in force stay, and the computer never falls back to no rules on an answer it cannot verify.
+// Once an answer from the workspace has verified, the computer is latched to enforce mode for it, every signed answer's
+// freshness proof is kept, a 304 renews nothing without a verified proof, and a 401 drops the rules only with a verified
+// revocation (policy-freshness.ts).
 
 import { closeSync, existsSync, fstatSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
 import { join } from "node:path";
@@ -33,6 +36,7 @@ import { evidenceDetailFrom } from "./evidence-detail.js";
 import { receiptContextFrom } from "./receipt-context.js";
 import { admitSigned, checkAnswerSignature, digestGrants, readSignatureState, workspaceIdOf, type SignatureReason, type SignatureState } from "./policy-signature.js";
 import { pinNextKey, signatureModeAt, useNextKey } from "./policy-next-key.js";
+import { checkFreshness, checkRevocation, decodeFreshnessHeader, laterOf, latchedTo, FRESHNESS_HEADER, type FreshnessCheck, type StoredFreshness, type StoredLatch } from "./policy-freshness.js";
 import { HOOK_VERSION_HEADER, versionedFetch } from "./workspace-fetch.js";
 import { packsHeaderValue, restampPacks, syncPacks, PACK_ENGINE_HEADER, PACKS_HEADER } from "./pack-sync.js";
 import { packEngineLevel } from "./pack-store.js";
@@ -217,10 +221,18 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   let packState = meta.packs ?? null;
   // And what became of the last next-key document the workspace sent.
   let nextKey = meta.next_key ?? null;
+  // Replay protection, the latch and freshness hold per workspace: a computer connected to another workspace starts again (an
+  // answer from the old one can never verify here, since the signature binds the workspace id).
+  const workspaceId = workspaceIdOf(connection);
+  // Latched to signed answers once one verified (policy-freshness.ts); `mode` above is then already `enforce`.
+  let latch: StoredLatch | null = meta.policy_latch ?? null;
+  const latched = latchedTo(meta, workspaceId);
+  // The newest verified freshness proof, for this workspace only.
+  let freshness: StoredFreshness | null = meta.policy_freshness?.workspace === workspaceId ? meta.policy_freshness : null;
   // Every check records when it was tried; only a successful one (it clears the error: rules applied, unchanged, or the
   // workspace's own-rules answer) moves `checked_at`, so "Rules updated" is the last check that worked. A failed one keeps
   // `checked_at` and says why in `last_error`.
-  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, receipt_context: receiptContext, packs: packState, next_key: nextKey, ...patch,
+  const save = (patch: Partial<ManagedMeta>) => writeMeta(dir, { ...meta, recommended, local_retention_days: retention, evidence_detail: detail, heartbeat_interval_s: heartbeatInterval, receipt_context: receiptContext, packs: packState, next_key: nextKey, policy_latch: latch, policy_freshness: freshness, ...patch,
     last_attempt_at: now.toISOString(), ...(patch.last_error === null ? { checked_at: now.toISOString(), checked_ok_at: now.toISOString() } : {}) });
 
   const ack = async (body: { export_id: string; revision: number; rules_digest: string; result: "loaded" | "rejected"; reason?: RefusalReason; skipped_rules?: string[] }): Promise<ManagedMeta["last_ack"]> => {
@@ -278,9 +290,6 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     await syncInstallBlocklist(dir, { base, headers: auth, fetchImpl, now: now.getTime(), timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT_MS });
   } else if (res.status === 401 || res.status === 200 || res.status === 204 || res.status === 304) removeBlocklist(dir);
   const at = now.toISOString();
-  // Replay protection holds per workspace: a computer connected to another workspace starts again (an answer from the old
-  // one can never verify here, since the signature binds the workspace id).
-  const workspaceId = workspaceIdOf(connection);
   const lastIssuedAt = (): string | null => (meta.policy_issued_workspace ?? null) === workspaceId ? meta.policy_issued_at ?? null : null;
   const issued = (issuedAt: string | null) => (issuedAt ? { policy_issued_at: issuedAt, policy_issued_workspace: workspaceId } : {});
   /** Bring the pack cache in step with an answer whose rules signature was admitted. An answer that names no packs changes
@@ -296,20 +305,41 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       ...(result.state === "partial" ? { failed: result.failed.map((f) => ({ id: f.id, version: f.version, reason: f.message.slice(0, 300), code: f.code, ...(f.needs !== undefined ? { needs: f.needs } : {}), held: f.held, held_until: f.held_until })) } : {}),
     };
   };
+  /** Latch this computer to signed answers from the workspace once one verified (policy-freshness.ts). */
+  const latchOn = (keyId: string): void => {
+    if (workspaceId && !latchedTo({ policy_latch: latch }, workspaceId)) latch = { workspace: workspaceId, at, key_id: keyId };
+  };
   const signed = (raw: Record<string, unknown>, managed: boolean) => {
     const check = checkAnswerSignature(raw, { workspace: workspaceId, computer: installationId, managed, lastIssuedAt: lastIssuedAt(), now }, mode);
+    if (check.result === "verified") latchOn(check.keyId);
     return { issuedAt: check.result === "verified" ? check.issuedAt : null, admitted: admitSigned(check, mode, at) };
   };
+  /** Check a freshness proof for the answer in hand and keep it when it verifies. */
+  const takeFreshness = (value: unknown, context: { revision: number; managed: boolean; etag: string | null }): FreshnessCheck => {
+    const check = checkFreshness(value, { workspace: workspaceId, computer: installationId, ...context, lastIssuedAt: freshness?.issued_at ?? null, now });
+    if (check.result === "verified") { freshness = check.freshness; latchOn(check.freshness.key_id); }
+    return check;
+  };
   if (res.status === 401) {
-    // A 401 carries no signature. In enforce mode it is not reason enough to drop the workspace's rules: they stay in
-    // force until the person signs in again (or disconnects this computer), so a forged 401 never relaxes them.
-    if (mode === "enforce" && isManaged(dir)) {
-      const state: SignatureState = { mode, last: "refused", reason: "unsigned_policy", at };
-      save({ policy_signature: state, last_error: "the workspace connection is no longer valid; in enforce mode the workspace rules in force stay until this computer signs in again or is disconnected" });
+    // A signed revocation in the body (policy-freshness.ts) is the workspace's own word that this computer is disconnected.
+    let body: unknown;
+    try { body = await res.json(); } catch { body = null; }
+    const revocation = body && typeof body === "object" ? (body as Record<string, unknown>).revocation : undefined;
+    const revoked = checkRevocation(revocation, { workspace: workspaceId, computer: installationId, lastIssuedAt: laterOf(lastIssuedAt(), freshness?.issued_at), now });
+    if (revoked.result === "verified") latchOn(revoked.keyId);
+    // Otherwise a 401 carries no signature. In enforce mode (and once latched) it is not reason enough to drop the workspace's
+    // rules: they stay in force until the person signs in again (or disconnects this computer), so a forged 401 never relaxes them.
+    if (revoked.result !== "verified" && mode === "enforce" && isManaged(dir)) {
+      const reason: SignatureReason = revoked.result === "refused" ? revoked.reason : "unsigned_policy";
+      const state: SignatureState = { mode, last: "refused", reason, at };
+      save({ policy_signature: state, last_error: revoked.result === "refused"
+        ? `the workspace connection is no longer valid, but its revocation was refused (${revoked.message}); the workspace rules in force stay until this computer signs in again or is disconnected`
+        : "the workspace connection is no longer valid; in enforce mode the workspace rules in force stay until this computer signs in again or is disconnected" });
       return { state: "disconnected" };
     }
     const dropped = backToOwnRules();
     save({ revision: null, rules_digest: null, export_id: null, etag: null, last_error: "the workspace connection is no longer valid; this computer uses its own rules",
+      ...(revoked.result === "verified" ? { policy_signature: { mode, last: "verified", reason: null, at }, ...issued(revoked.issuedAt) } : {}),
       ...(dropped ? { rules_dropped_at: at, rules_dropped_told: false } : {}) });
     return { state: "disconnected" };
   }
@@ -321,6 +351,8 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       return { state: "refused", revision: null, reason: ackReasonFor(admitted.reason), message: admitted.message, signature: admitted.reason };
     }
     const changed = backToOwnRules();
+    // The signed "no rules" answer's freshness proof is for "unmanaged" (policy-freshness.ts).
+    if (raw && issuedAt) takeFreshness(raw.freshness, { revision: 0, managed: false, etag: null });
     if (raw) await syncPackList(raw);
     const last = meta.last_ack;
     const confirmed = changed || !last || last.revision !== 0 || last.result !== "loaded"
@@ -331,12 +363,17 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
   };
   if (res.status === 204) return toOwnRules(admitSigned({ result: "unsigned" }, mode, at), null);
   if (res.status === 304 && isManaged(dir) && meta.revision !== null) {
+    // The 304's freshness proof (policy-freshness.ts), for the ETag in force. Once latched, only a verified one renews anything:
+    // a 304 without one keeps the rules and renews nothing (neither the proof's validity nor the packs' clock).
+    const header = res.headers?.get?.(FRESHNESS_HEADER) ?? null;
+    const fresh = takeFreshness(decodeFreshnessHeader(header), { revision: meta.revision, managed: true, etag: meta.etag });
+    const renews = !latched || fresh.result === "verified";
     // Not modified covers the pack list too: every pack it confirmed is renewed by this check-in; a pack it named at a version
     // this computer could not fetch or check keeps its own clock. A list that was refused as a whole renews nothing.
-    if (packState?.complete || packState?.failed) restampPacks(dir, now, packState.failed?.map((f) => f.id) ?? []);
+    if (renews && (packState?.complete || packState?.failed)) restampPacks(dir, now, packState.failed?.map((f) => f.id) ?? []);
     const confirmed = meta.last_ack?.revision === meta.revision && meta.last_ack.result === "loaded" ? meta.last_ack
       : await ack({ export_id: meta.export_id!, revision: meta.revision, rules_digest: meta.rules_digest!, result: "loaded" });
-    save({ last_ack: confirmed, last_error: null });
+    save({ last_ack: confirmed, last_error: fresh.result === "refused" ? `${fresh.message}; the rules in force stay and nothing was renewed` : null });
     return { state: "unchanged", revision: meta.revision };
   }
   if (res.status !== 200) {
@@ -386,6 +423,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
       save({ last_ack: confirmed, policy_signature: again.admitted.state, last_error: again.admitted.message });
       return { state: "refused", revision: meta.revision, reason, message: again.admitted.message, signature: again.admitted.reason };
     }
+    if (again.issuedAt) takeFreshness(r.freshness, { revision: meta.revision!, managed: true, etag });
     await syncPackList(r);
     const confirmed = meta.last_ack?.revision === meta.revision && meta.last_ack.result === "loaded" ? meta.last_ack
       : await ack({ export_id: meta.export_id!, revision: meta.revision!, rules_digest: meta.rules_digest!, result: "loaded" });
@@ -418,6 +456,7 @@ export async function syncPolicy(dir: string, options: SyncOptions): Promise<Syn
     return { state: "refused", revision: doc.revision, reason: installed.reason, message: installed.message };
   }
   options.afterPolicyWrite?.(dir);
+  if (issuedAt) takeFreshness(r.freshness, { revision: doc.revision, managed: true, etag });
   await syncPackList(r);
   const confirmed = await ack({ export_id: doc.export_id, revision: doc.revision, rules_digest: doc.rules_digest, result: "loaded", skipped_rules: inspected.skipped });
   save({ revision: doc.revision, rules_digest: doc.rules_digest, export_id: doc.export_id, etag, grants_digest: digestGrants(r), last_ack: confirmed, last_error: null, rule_notes: inspected.notes.length ? inspected.notes : null, skipped_rules: inspected.skipped.length ? inspected.skipped : null,

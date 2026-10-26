@@ -17,6 +17,8 @@
 //   dual     the default. A signed document must verify; an unsigned one is accepted and recorded (`unsigned_policy`).
 //   enforce  an unsigned document is refused too. A refused document never changes the rules in force: the computer keeps
 //            the policy it has, and never falls back to no rules.
+// Once one answer from the workspace has verified, the computer stays in enforce mode for that workspace whatever the
+// setting says (the latch, policy-freshness.ts): a workspace that signs never has its signature stripped on the way.
 
 import { createHash, verify } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -33,7 +35,9 @@ export const SIGNATURE_MODE_ENV = "SCOPEBOND_POLICY_SIGNATURE_MODE";
 /** Why a document's signature was not accepted. `unsigned_policy` is also the code recorded when dual mode accepts one. */
 export type SignatureReason =
   | "unsigned_policy" | "malformed_signature" | "no_workspace_id" | "wrong_workspace" | "wrong_computer"
-  | "unknown_key" | "key_not_valid" | "bad_signature" | "replayed" | "issued_in_future";
+  | "unknown_key" | "key_not_valid" | "bad_signature" | "replayed" | "issued_in_future"
+  /** A freshness proof (policy-freshness.ts) for another version of the rules, or with a validity window out of bounds. */
+  | "freshness_mismatch" | "freshness_window";
 
 export interface SignedPolicyPayload {
   v: 1;
@@ -44,10 +48,16 @@ export interface SignedPolicyPayload {
   local_changes: boolean;
   managed: boolean;
   issued_at: string;
-  /** Only on a tool settings section's payload ("tool_settings") or a document's grants payload ("grants"); a rules payload
-   *  never carries it. */
-  kind?: "tool_settings" | "grants" | "packs";
+  /** Only on a tool settings section's payload ("tool_settings"), a document's grants payload ("grants"), a pack list's
+   *  ("packs"), a freshness proof's ("freshness") or a revocation's ("revocation", policy-freshness.ts); a rules payload never
+   *  carries it. */
+  kind?: SignedDomain;
+  /** Only on a freshness proof's payload: until when the answer it covers may be relied on (RFC 3339). */
+  valid_until?: string;
 }
+
+/** The kinds of signed payload besides a rules document's. */
+export type SignedDomain = "tool_settings" | "grants" | "packs" | "freshness" | "revocation";
 
 export type SignatureCheck =
   | { result: "verified"; keyId: string; issuedAt: string }
@@ -92,6 +102,9 @@ const BASE64 = /^[A-Za-z0-9+/]{43,200}={0,2}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 const KEY_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 
+/** Whether `value` is an RFC 3339 time this module accepts as a signed `issued_at`. */
+export const isSignedTime = (value: unknown): value is string => typeof value === "string" && RFC3339.test(value) && Number.isFinite(Date.parse(value));
+
 export interface SignatureContext {
   /** The workspace id in cloud.json; null when the connection does not name one. */
   workspace: string | null;
@@ -103,8 +116,11 @@ export interface SignatureContext {
   lastIssuedAt: string | null;
   keys?: PolicyKey[];
   now?: Date;
-  /** Set only by `checkToolSettingsSignature` / `checkGrantsSignature`: the payload then carries that `kind`. */
-  domain?: "tool_settings" | "grants" | "packs";
+  /** Set only by `checkToolSettingsSignature` / `checkGrantsSignature` / `checkPacksSignature` and the freshness and
+   *  revocation checks (policy-freshness.ts): the payload then carries that `kind`. */
+  domain?: SignedDomain;
+  /** Set only by the freshness check: the payload then carries this `valid_until`. */
+  validUntil?: string;
 }
 
 /** Check a document's signature. Pure apart from reading the trusted keys (`keys` overrides them). */
@@ -139,6 +155,7 @@ export function checkPolicySignature(doc: Record<string, unknown>, context: Sign
     v: 1, workspace: context.workspace, computer: context.computer, revision: doc.revision as number,
     rules_digest: doc.rules_digest, local_changes: doc.local_changes === true, managed: context.managed, issued_at: issuedAt,
     ...(context.domain ? { kind: context.domain } : {}),
+    ...(context.validUntil !== undefined ? { valid_until: context.validUntil } : {}),
   };
   let ok: boolean;
   try { ok = verify(null, signedPolicyBytes(payload), publicKey, Buffer.from(signature, "base64")); } catch { ok = false; }

@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { homedir, userInfo } from "node:os";
 import { evaluate, type OverrideHandler, type OverrideRecord } from "@scopebond/gateway";
 import { compileManaged, floorDocument, managedEnforce, packRuleAdjustments, MANAGED_DOC_FILE, personMayAct, RULE_OF_CLAUSE, writeAtomic, type AnyManagedRuleId, type ManagedDocument, type OverrideTerms, managedSetting, packRulesOf } from "./managed.js";
-import { ALLOWANCE_DEFAULT_DAYS, ALLOWANCE_MAX_DAYS, makeAllowance, markBlocked, matchAllowance, matchPatternAllowance, mergeWorkspaceAllowances, patternKey, readAllowances, readBlocked, recordBlocked, rememberActionText, writeAllowances, type BlockedItem, makeQuietBlock, matchQuietBlock, type Allowance } from "./allowances.js";
+import { ALLOWANCE_DEFAULT_DAYS, ALLOWANCE_MAX_DAYS, makeAllowance, markBlocked, matchAllowance, matchPatternAllowance, mergeWorkspaceAllowances, withoutWorkspaceAllowances, patternKey, readAllowances, readBlocked, recordBlocked, rememberActionText, writeAllowances, type BlockedItem, makeQuietBlock, matchQuietBlock, type Allowance } from "./allowances.js";
 import { validAllowanceMatch } from "@scopebond/policy-schema/allow-patterns";
 import { enginePath, packRecipesFor, patternSetting, rulePatternable, similarFor, type SimilarOffer, type SimilarProposal } from "./pattern-recipes.js";
 import { realEnginePath, repositoryTop } from "./git-restore.js";
@@ -34,6 +34,7 @@ import type { ShownCommand } from "./map.js";
 import { actionSummary, revealHidden } from "./action-words.js";
 import { FINAL_INSTRUCTION } from "./explain.js";
 import { quietByWorkspace, quietPatternsOf } from "./tune-digest.js";
+import { grantsExpired } from "./policy-freshness.js";
 
 export { actionSummary, plainAction, revealHidden } from "./action-words.js";
 
@@ -356,7 +357,11 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: ShownOve
     const osDigest = osUserDigest();
     // A standing allowance for this rule and this exact action lets it through, and the receipt names it.
     let allowances = readAllowances(ctx.dir);
-    if (doc.allowances || doc.revoked_allowances) allowances = mergeWorkspaceAllowances(allowances, doc.allowances, doc.revoked_allowances);
+    // Past the workspace's last freshness proof its grants are expired (policy-freshness.ts): what it allowed, and the copies of
+    // it kept here, let nothing through until a fresh answer; what it revoked stays revoked. `allowances` is still what is saved.
+    const expired = grantsExpired(ctx.dir, t);
+    if (doc.allowances || doc.revoked_allowances) allowances = mergeWorkspaceAllowances(allowances, expired ? [] : doc.allowances, doc.revoked_allowances);
+    const usable = expired ? withoutWorkspaceAllowances(allowances, doc.allowances) : allowances;
     const query = (k: string) => ({ rule, actionKey: k, osUserDigest: osDigest, now: t, sessionId: ctx.sessionId ?? null });
     // A pattern allowance ("Similar commands in this project") covers it when it is inside the pattern's bounds.
     const project = workingFolder(ctx.cwd);
@@ -374,10 +379,10 @@ export function createOverrideHandler(ctx: OverrideContext): { handler: ShownOve
     };
     // The person chose to keep this action blocked without being asked (a quiet block): denied at once, no one is asked. An
     // allowance made after it (an admin's answer) wins; one made before it does not.
-    const quiet = keys.reduce<Allowance | null>((found, k) => found ?? matchQuietBlock(allowances, query(k)), null);
+    const quiet = keys.reduce<Allowance | null>((found, k) => found ?? matchQuietBlock(usable, query(k)), null);
     const standing = quiet
-      ? allowances.find((a) => Date.parse(a.created_at) > Date.parse(quiet.created_at) && (keys.some((k) => matchAllowance([a], query(k))) || !!matchPatternAllowance([a], patternQuery))) ?? null
-      : keys.reduce<Allowance | null>((found, k) => found ?? matchAllowance(allowances, query(k)), null) ?? matchPatternAllowance(allowances, patternQuery);
+      ? usable.find((a) => Date.parse(a.created_at) > Date.parse(quiet.created_at) && (keys.some((k) => matchAllowance([a], query(k))) || !!matchPatternAllowance([a], patternQuery))) ?? null
+      : keys.reduce<Allowance | null>((found, k) => found ?? matchAllowance(usable, query(k)), null) ?? matchPatternAllowance(usable, patternQuery);
     if (quiet && !standing) {
       last = { rule, title, outcome: "quiet" };
       blocked("quiet");
