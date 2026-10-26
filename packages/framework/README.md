@@ -82,7 +82,15 @@ manifest mapping to a richer type). "Allow search and read; cap transfers":
 ```
 
 An unlisted tool is denied by the closed allowlist (fail closed). `createToolGuard`
-returns `{ check(name, args) }` if you drive the tool loop yourself.
+returns `{ check(name, args) }` if you drive the tool loop yourself. The manifest is
+read by its own entries only, so a tool named `constructor` is `tool.constructor`.
+
+A spend limit reads the call's `asset` and `amount` arguments. Only an asset that is
+a nonempty string and an amount that is a whole nonnegative number are read; any
+other value (an amount sent as text) is left out, and the spend limit then denies
+the call as one missing its asset or amount. Assets compare without case (`usdc` is
+`USDC`). To have every call of a money tool checked, whatever its arguments, list its
+action type in the clause: `"action_types": ["payout.create"]`.
 
 ## What a receipt keeps of the tool's arguments
 

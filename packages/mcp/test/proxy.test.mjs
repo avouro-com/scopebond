@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync, createPublicKey } from "node:crypto";
 import { createMcpProxy, mapMcpToolCall } from "../dist/index.js";
 import { verifyReceipt } from "@scopebond/gateway";
+import { listed } from "./listed.mjs";
 
 const keyPem = () => generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" }).toString();
 const policy = {
@@ -15,7 +16,7 @@ const policy = {
 
 function stubUpstream() {
   const calls = [];
-  return { calls, call: async (m) => { calls.push(m); return { jsonrpc: "2.0", id: m.id ?? null, result: { ok: true } }; } };
+  return listed({ calls, call: async (m) => { calls.push(m); return { jsonrpc: "2.0", id: m.id ?? null, result: { ok: true } }; } }, ["read_file"]);
 }
 
 function proxyWith(upstream, onReceipt) {
@@ -73,7 +74,7 @@ test("a tool failing the tool bound is denied regardless of a matching server", 
 test("non-tool-call methods pass through unchanged", async () => {
   const upstream = stubUpstream();
   const { proxy } = proxyWith(upstream);
-  const res = await proxy.handle({ jsonrpc: "2.0", id: 9, method: "tools/list", params: {} });
+  const res = await proxy.handle({ jsonrpc: "2.0", id: 9, method: "resources/list", params: {} });
   assert.deepEqual(res.result, { ok: true });
   assert.equal(upstream.calls.length, 1, "the passthrough reached the upstream");
 });

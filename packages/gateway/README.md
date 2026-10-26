@@ -359,9 +359,13 @@ A name in a denylist is compared as a name. To keep agents off an internal servi
 or the cloud metadata endpoint, list its address (`169.254.169.254`): before it sends
 anything, the executor resolves the requested name and refuses the call if an
 address it resolves to is denied (inject `lookup` to replace the system resolver).
-The executor resolves the name again when it connects, so a DNS server that answers
-differently between the two lookups (DNS rebinding) is not stopped here. A denylist
-is best effort: prefer an `endpoint_allowlist`, and constrain egress at the network.
+The call is then sent to the addresses that check approved, without resolving the
+name again, so a DNS server that answers the check with an allowed address and the
+connection with a denied one (DNS rebinding) cannot send it to the denied address.
+The request still names the host (the `Host` header and, for HTTPS, the server name
+and certificate check are for the name). An injected `fetch` is your own transport
+and resolves names itself. A denylist is best effort: prefer an
+`endpoint_allowlist`, and constrain egress at the network.
 
 A call that cannot be sent as written (a path that names another host, a header with a line break, a
 connection or framing header such as `Transfer-Encoding` or `Content-Length`, a method fetch does not

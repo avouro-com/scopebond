@@ -150,7 +150,8 @@ function validateAssets(v: unknown): boolean {
  *  types, plus the schema's anyOf/dependentRequired constraints. */
 const CLAUSE_VALIDATORS: Record<string, (c: Obj) => boolean> = {
   spend_limit: (c) =>
-    onlyKeys(c, [...CLAUSE_BASE_KEYS, "asset", "max_per_action", "max_per_window", "window", "scope"]) &&
+    onlyKeys(c, [...CLAUSE_BASE_KEYS, "asset", "max_per_action", "max_per_window", "window", "scope", "action_types"]) &&
+    (!("action_types" in c) || isNonEmptyStringArray(c.action_types)) &&
     typeof c.asset === "string" &&
     (("max_per_action" in c) || (("max_per_window" in c) && ("window" in c))) &&
     (!("max_per_window" in c) || "window" in c) &&
