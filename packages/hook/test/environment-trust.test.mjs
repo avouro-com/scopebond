@@ -79,6 +79,17 @@ test("a signed build reads each setting from the hook's command line, never from
   assert.deepEqual(ignoredSettings({ SCOPEBOND_HOME: "/x" }, false), []);
 });
 
+test("a hook command the hook starts gets the settings from its own command line", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sb-envtrust-self-"));
+  try {
+    const script = join(dir, "self.mjs");
+    writeFileSync(script, `const { hookSelfCommand } = await import(${JSON.stringify(new URL("../dist/self.js", import.meta.url).href)});\nprocess.stdout.write(JSON.stringify(hookSelfCommand(["status", "--json"])[1].slice(1)));\n`);
+    const r = spawnSync(process.execPath, [script, "--setting", "SCOPEBOND_HOME=/from/installer", "--setting", "PATH=/ignored"], { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(JSON.parse(r.stdout), ["status", "--json", "--setting", "SCOPEBOND_HOME=/from/installer"]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("read as the signed build reads them, extra rules keys and a lower pack engine level in the environment do nothing", () => {
   const { publicKey } = generateKeyPairSync("ed25519");
   const extra = { key_id: "pol_test_env", public_key: publicKey.export({ type: "spki", format: "pem" }).toString(), not_before: "2026-01-01T00:00:00Z", not_after: "2030-01-01T00:00:00Z" };

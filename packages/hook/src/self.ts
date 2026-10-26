@@ -4,6 +4,7 @@
 
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { ownSettingArgs } from "./setting-args.js";
 
 /** Whether this process is the single executable (Node's single executable application). */
 export function isSingleExecutable(): boolean {
@@ -28,7 +29,9 @@ export function hookCliPath(): string {
 
 /** The program and arguments that run this hook's command line with `args`, in either build. */
 export function hookSelfCommand(args: readonly string[]): [string, string[]] {
-  return isSingleExecutable() ? [process.execPath, ["hook", ...args]] : [process.execPath, [hookCliPath(), ...args]];
+  // The settings this process was given on its command line go to the hook commands it starts, so they read the same ones.
+  const all = [...args, ...ownSettingArgs()];
+  return isSingleExecutable() ? [process.execPath, ["hook", ...all]] : [process.execPath, [hookCliPath(), ...all]];
 }
 
 /** `node:sqlite` (Node 22.13+). A bundle cannot resolve it through a module path, so it is taken from Node's built-ins. */

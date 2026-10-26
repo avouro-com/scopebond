@@ -1000,7 +1000,8 @@ Set `SCOPEBOND_POLICY_SYNC=off` to stop the five-minute check (the rules in forc
 - **Settings.** An npm install reads `SCOPEBOND_HOME`, `SCOPEBOND_POLICY_KEYS_JSON`, `SCOPEBOND_PACK_ENGINE_LEVEL`,
   `SCOPEBOND_POLICY_SYNC` and `SCOPEBOND_POLICY_SYNC_MS` from the environment. The signed installer's program (and the
   signed engine bundle it loads) reads them only from its hook command, written after the command as
-  `--setting NAME=VALUE`; in the environment they are ignored, and `doctor` lists them as not used.
+  `--setting NAME=VALUE`; in the environment they are ignored, and `doctor` lists them as not used. A hook command it
+  starts itself (a background compaction, the session heartbeat, a sign-in) is given the same settings.
   `SCOPEBOND_AS_SIGNED_BUILD=1` reads them the signed way on any install.
 - **Node's code-loading variables.** A hook call blocks the action and says why while `NODE_PATH` is set, or while
   `NODE_OPTIONS` carries a flag that loads or changes code in the program that decides: `--require`/`-r`, `--import`,

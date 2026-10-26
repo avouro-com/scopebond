@@ -36,11 +36,14 @@ test("the single executable decides a Claude Code call exactly as the npm hook d
     ...process.env, HOME: home, USERPROFILE: home, APPDATA: join(home, "AppData"), LOCALAPPDATA: join(home, "Local"),
     SCOPEBOND_HOME: join(home, ".sbhome"), SCOPEBOND_OBSERVATIONS_HEARTBEAT: "off", SCOPEBOND_HOOK_DIR: join(project, ".scopebond"),
   };
-  const init = spawnSync(exe, ["hook", "init", "--claude", "--yes"], { cwd: project, env, encoding: "utf8" });
+  // The executable is a signed build: it reads SCOPEBOND_HOME only from its command line, where an installer puts it (the
+  // npm hook it is compared with reads it from the environment above).
+  const sbSettings = ["--setting", `SCOPEBOND_HOME=${join(home, ".sbhome")}`];
+  const init = spawnSync(exe, ["hook", "init", "--claude", "--yes", ...sbSettings], { cwd: project, env, encoding: "utf8" });
   assert.equal(init.status, 0, init.stderr);
   const event = (tool, input) => JSON.stringify({ hook_event_name: "PreToolUse", session_id: "sea", tool_name: tool, tool_input: input, cwd: project });
   const decide = (viaExe, input, runEnv = env) => {
-    const [program, args] = viaExe ? [exe, ["hook", "claude"]] : [process.execPath, [hookCli, "claude"]];
+    const [program, args] = viaExe ? [exe, ["hook", "claude", ...sbSettings]] : [process.execPath, [hookCli, "claude"]];
     const started = performance.now();
     const run = spawnSync(program, args, { input, env: runEnv, cwd: project, encoding: "utf8" });
     return { ms: performance.now() - started, status: run.status, decision: run.stdout ? JSON.parse(run.stdout).hookSpecificOutput?.permissionDecision ?? null : null, stderr: run.stderr };
@@ -57,7 +60,7 @@ test("the single executable decides a Claude Code call exactly as the npm hook d
     assert.deepEqual({ status: a.status, decision: a.decision }, { status: b.status, decision: b.decision }, `${tool} ${JSON.stringify(input)}: ${a.stderr}`);
   }
   assert.equal(decide(true, event(...cases[0])).decision, "deny", "Scopebond's own folder stays protected");
-  const log = spawnSync(exe, ["hook", "log"], { cwd: project, env, encoding: "utf8" });
+  const log = spawnSync(exe, ["hook", "log", ...sbSettings], { cwd: project, env, encoding: "utf8" });
   assert.match(log.stdout, /receipt\(s\)/, "receipts are written to the store");
   // Warm starts: the first runs pay for the operating system's first look at a new file. Measured on the project's own
   // setup, the same way on every run (a user-level install below adds a second home the hook also looks at).
@@ -77,14 +80,14 @@ test("the single executable decides a Claude Code call exactly as the npm hook d
   console.log(`single executable: median warm hook call ${median.toFixed(0)} ms`);
   assert.ok(median < CEILING_MS, `median ${median.toFixed(0)} ms`);
   // Installed for the user, the coding agent's settings name the executable itself: no Node, npm or npx.
-  const install = spawnSync(exe, ["hook", "install", "--claude", "--yes"], { cwd: home, env: { ...env, SCOPEBOND_HOOK_DIR: "" }, encoding: "utf8" });
+  const install = spawnSync(exe, ["hook", "install", "--claude", "--yes", ...sbSettings], { cwd: home, env: { ...env, SCOPEBOND_HOOK_DIR: "" }, encoding: "utf8" });
   assert.equal(install.status, 0, install.stdout + install.stderr);
   const settings = readFileSync(join(home, ".claude", "settings.json"), "utf8");
   // On Windows the path is written unquoted with forward slashes (short names for any folder a shell would misread), the
   // form cmd.exe, PowerShell and Git Bash all start; elsewhere it is quoted.
   const command = JSON.parse(settings).hooks.PreToolUse[0].hooks[0].command;
   assert.ok(command === `"${exe}" hook claude` || (process.platform === "win32" && /^[A-Za-z]:\/\S+\/scopebond-agent\.exe hook claude$/.test(command)), settings);
-  const doctor = spawnSync(exe, ["hook", "doctor"], { cwd: home, env: { ...env, SCOPEBOND_HOOK_DIR: "" }, encoding: "utf8" });
+  const doctor = spawnSync(exe, ["hook", "doctor", ...sbSettings], { cwd: home, env: { ...env, SCOPEBOND_HOOK_DIR: "" }, encoding: "utf8" });
   assert.doesNotMatch(doctor.stdout, /cannot start|could not start/i, doctor.stdout);
   // With the user-level install beside the project's own setup (the hook finds the project's folder itself, no pinned
   // folder), a call costs what it cost before: the second home adds no work per call. Once (2026-10-07) a run measured
@@ -140,7 +143,9 @@ test("inside the single executable: a signed plugin loads and fills the slot; an
     SCOPEBOND_HOME: sbHome, SCOPEBOND_OBSERVATIONS_HEARTBEAT: "off", SCOPEBOND_HOOK_DIR: join(project, ".scopebond"),
     SCOPEBOND_POLICY_KEYS_JSON: JSON.stringify([keyEntry]),
   };
-  assert.equal(spawnSync(exe, ["hook", "init", "--claude", "--yes"], { cwd: project, env, encoding: "utf8" }).status, 0);
+  // A signed build reads the home and the extra key only from its command line, where an installer puts them.
+  const settings = ["--setting", `SCOPEBOND_HOME=${sbHome}`, "--setting", `SCOPEBOND_POLICY_KEYS_JSON=${JSON.stringify([keyEntry])}`];
+  assert.equal(spawnSync(exe, ["hook", "init", "--claude", "--yes", ...settings], { cwd: project, env, encoding: "utf8" }).status, 0);
   // The plugin: loaded by the executable through Node's default loader (the executable's own code cannot import a file).
   const source = Buffer.from('export function inspect(action) { return { pattern_id: "' + "c".repeat(64) + '", slot: Buffer.from(action.action_type).toString("base64") }; }\n');
   const sha256 = createHash("sha256").update(source).digest("hex");
@@ -154,7 +159,7 @@ test("inside the single executable: a signed plugin loads and fills the slot; an
   writeFileSync(join(sbHome, "engine", "99.0.0", "manifest.json.sig"), "AAAA");
   writeFileSync(join(sbHome, "engine", "current.json"), JSON.stringify({ version: "99.0.0", at: Date.now(), previous: null }));
   const input = JSON.stringify({ hook_event_name: "PreToolUse", session_id: "sea-slot", tool_name: "Bash", tool_input: { command: "git status" }, cwd: project });
-  const run = spawnSync(exe, ["hook", "claude"], { input, env, cwd: project, encoding: "utf8" });
+  const run = spawnSync(exe, ["hook", "claude", ...settings], { input, env, cwd: project, encoding: "utf8" });
   assert.equal(run.status, 0, run.stderr);
   assert.doesNotMatch(run.stdout, /hijacked/);
   assert.match(readFileSync(join(sbHome, "engine", "start-failures.log"), "utf8"), /99\.0\.0/, "the refusal is recorded");
@@ -164,7 +169,7 @@ test("inside the single executable: a signed plugin loads and fills the slot; an
   await Promise.resolve(store.close?.());
   assert.ok(receipts.length > 0 && receipts.every((r) => r.payload.pattern_id === "c".repeat(64)), "every receipt carries the plugin's pattern id");
   // A candidate that does not verify fails the check instead of passing on the engine inside.
-  const candidate = spawnSync(exe, ["hook", "packs", "test", "--all", "--json"], { cwd: project, env: { ...env, SCOPEBOND_ENGINE_CANDIDATE: "99.0.0" }, encoding: "utf8" });
+  const candidate = spawnSync(exe, ["hook", "packs", "test", "--all", "--json", ...settings], { cwd: project, env: { ...env, SCOPEBOND_ENGINE_CANDIDATE: "99.0.0" }, encoding: "utf8" });
   assert.equal(candidate.status, 3, candidate.stdout + candidate.stderr);
   assert.match(candidate.stderr, /candidate engine 99\.0\.0/);
 });

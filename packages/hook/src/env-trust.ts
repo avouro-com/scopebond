@@ -17,24 +17,13 @@
 // can change for the processes it starts. Where the two differ the account's wins, and doctor says so.
 //
 // This file is loaded by the engine shim before the engine on every hook call, so it imports only Node's built-ins and
-// self.ts (which does the same).
+// self.ts and setting-args.ts (which do the same).
 
 import { homedir, userInfo } from "node:os";
 import { isSignedBuild } from "./self.js";
+import { commandLineSettings, isCommandLineSetting, processSettings, COMMAND_LINE_SETTINGS } from "./setting-args.js";
 
-/** The variables a signed build reads only from its hook command line. */
-export const COMMAND_LINE_SETTINGS: readonly string[] = Object.freeze([
-  "SCOPEBOND_HOME", "SCOPEBOND_POLICY_KEYS_JSON", "SCOPEBOND_PACK_ENGINE_LEVEL", "SCOPEBOND_POLICY_SYNC", "SCOPEBOND_POLICY_SYNC_MS",
-]);
-
-/** Whether `name` is one of those settings: the list above, and any later `SCOPEBOND_POLICY_SYNC…` variable. */
-export function isCommandLineSetting(name: string): boolean {
-  const upper = name.toUpperCase();
-  return COMMAND_LINE_SETTINGS.includes(upper) || upper.startsWith("SCOPEBOND_POLICY_SYNC");
-}
-
-/** The flag the installer writes before each setting on the hook's command line. */
-export const SETTING_FLAG = "--setting";
+export { COMMAND_LINE_SETTINGS, SETTING_FLAG, commandLineSettings, isCommandLineSetting, takeSettingArgs, withoutSettingArgs } from "./setting-args.js";
 
 /** Set to "1" to read settings as the signed build does on any install (stricter only: tests use it). */
 export const AS_SIGNED_BUILD_ENV = "SCOPEBOND_AS_SIGNED_BUILD";
@@ -45,51 +34,6 @@ export const CODE_LOADING_VARS: readonly string[] = Object.freeze(["NODE_OPTIONS
 /** Whether settings are read from the command line only: a signed build, or `SCOPEBOND_AS_SIGNED_BUILD=1`. */
 export function commandLineOnly(env: NodeJS.ProcessEnv = process.env): boolean {
   return isSignedBuild() || env[AS_SIGNED_BUILD_ENV] === "1";
-}
-
-/** The `--setting NAME=VALUE` pairs in `argv`, for the settings above only. A later pair for the same name wins. */
-export function commandLineSettings(argv: readonly string[]): Map<string, string> {
-  const out = new Map<string, string>();
-  for (let i = 0; i < argv.length - 1; i++) {
-    if (argv[i] !== SETTING_FLAG) continue;
-    const pair = argv[i + 1];
-    const at = pair.indexOf("=");
-    if (at <= 0) continue;
-    const name = pair.slice(0, at).toUpperCase();
-    if (isCommandLineSetting(name)) out.set(name, pair.slice(at + 1));
-    i += 1;
-  }
-  return out;
-}
-
-/** `argv` without its `--setting NAME=VALUE` pairs (the commands never see them). */
-export function withoutSettingArgs(argv: readonly string[]): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === SETTING_FLAG && i + 1 < argv.length) {
-      const pair = argv[i + 1];
-      const at = pair.indexOf("=");
-      if (at > 0 && isCommandLineSetting(pair.slice(0, at))) { i += 1; continue; }
-    }
-    out.push(argv[i]);
-  }
-  return out;
-}
-
-/** This process's own command line settings, read once (before `main` takes the flags out of `process.argv`). */
-let ownSettings: Map<string, string> | null = null;
-function processSettings(): Map<string, string> {
-  ownSettings ??= commandLineSettings(process.argv.slice(2));
-  return ownSettings;
-}
-
-/** Take the setting flags out of `process.argv`, keeping their values for `setting`; returns `argv` without them. */
-export function takeSettingArgs(argv: readonly string[]): string[] {
-  processSettings();
-  const rest = process.argv.slice(2);
-  const cleaned = withoutSettingArgs(rest);
-  if (cleaned.length !== rest.length) process.argv.splice(2, rest.length, ...cleaned);
-  return withoutSettingArgs(argv);
 }
 
 /** The value of one setting as this process may believe it: from the command line, else (an npm install only) from the
