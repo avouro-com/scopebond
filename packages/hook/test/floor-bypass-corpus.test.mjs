@@ -63,6 +63,15 @@ const cases = [
   { id: "tar-extract-C-claude", command: "tar -xf /tmp/x.tar -C ~/.claude" },
   { id: "git-apply-directory-into-home", command: "git apply --directory=.. /tmp/x.patch", cwd: "home" },
 
+  // 4b. a nested script read in its own language: a PowerShell backtick or string join, a cmd `^` escape.
+  { id: "nested-pwsh-backtick-reads-scopebond", command: "pwsh -c 'Get-Content ~/.sc`opebond/agent.key'" },
+  { id: "nested-powershell-concat-reads-scopebond", command: "powershell.exe -Command '$p=\"~/.scope\"+\"bond/agent.json\"; Get-Content $p'" },
+  { id: "nested-pwsh-encoded-backtick-reads-scopebond", command: `pwsh -EncodedCommand ${Buffer.from("gc ~/.sc`opebond/agent.key", "utf16le").toString("base64")}` },
+  { id: "ps-nested-pwsh-backtick-reads-scopebond", tool: "PowerShell", command: "pwsh -c \"gc ~/.sc``opebond/agent.key\"" },
+  { id: "cmd-caret-reads-scopebond-key", command: "cmd /c type ~/.scope^bond/agent.key" },
+  { id: "cmd-caret-writes-claude-settings", command: "cmd /c \"copy /y C:/tmp/x ~/.cl^aude/settings.json\"" },
+  { id: "cmd-k-caret-after-separator-deletes-policy", command: "cmd.exe /K \"echo hi & del ~/.scope^bond/policy.json\"" },
+
   // 5. the hook and agent installed globally with npm.
   { id: "overwrite-npm-global-hook", command: "cp /tmp/evil.js ~/.npm-global/lib/node_modules/@scopebond/hook/dist/cli.js" },
   { id: "delete-npm-global-agent", command: "rm -rf /usr/local/lib/node_modules/@scopebond/agent" },

@@ -480,10 +480,129 @@ export function shellScriptArg(argv: string[]): string | null {
   return null;
 }
 
+/** cmd's `/c` and `/k` switch, also as Git Bash has it written (`//c`) and with the script right after it (`/cdir`). */
+const CMD_SCRIPT_SWITCH = /^\/\/?[ck](?![\\/])/i;
 /** `cmd /c …` / `cmd /k …`: everything after the switch is the script. */
 function cmdScriptArg(argv: string[]): string | null {
-  const at = argv.findIndex((a) => /^\/[ck]$/i.test(a));
-  return at >= 0 && at + 1 < argv.length ? argv.slice(at + 1).join(" ") : null;
+  const at = argv.findIndex((a) => CMD_SCRIPT_SWITCH.test(a));
+  if (at < 0) return null;
+  const script = [argv[at].replace(CMD_SCRIPT_SWITCH, ""), ...argv.slice(at + 1)].filter((w) => w !== "").join(" ");
+  return script === "" ? null : script;
+}
+
+/** One command of a `cmd /c` script, read in cmd's own terms (see `cmdCommands`). */
+interface CmdCommand {
+  /** The command as POSIX text that reads the same: each word as cmd hands it over, quoted for the POSIX reader. */
+  text: string;
+  /** The command as cmd runs it: `^` escapes applied and `\` read as the path separator. */
+  raw: string;
+  /** True when cmd puts a variable's value in it before it runs (`%NAME%`, `!NAME!`): what it runs is only known then. */
+  dynamic: boolean;
+}
+
+/** The spans of `script` cmd replaces with a variable's value before it splits or runs anything: `%NAME%` and, under delayed
+ *  expansion (`/v:on`), `!NAME!` — a sign, a name, the same sign. Read as broadly as cmd can: a span that names no variable
+ *  cmd leaves as written, and counts here all the same. */
+function cmdExpansions(script: string): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (const sign of ["%", "!"]) {
+    let open = script.indexOf(sign);
+    while (open >= 0) {
+      const close = script.indexOf(sign, open + 1);
+      if (close < 0) break;
+      if (close > open + 1) { out.push([open, close]); open = script.indexOf(sign, close + 1); }
+      else open = close; // `%%` names nothing: the second sign may open the next name
+    }
+  }
+  return out;
+}
+
+/** A word cmd hands a program, spelled for the POSIX reader: bare when it holds only characters that shell leaves as they are
+ *  (so a `*` or `?` stays a pattern, as cmd's own commands expand it), else single-quoted. A first word holding `=` is
+ *  quoted too: it is a program to cmd, not an assignment. */
+function posixWord(word: string, first: boolean): string {
+  if (word !== "" && /^[\w@%+:,./~*?=-]+$/.test(word) && !(first && word.includes("="))) return word;
+  return `'${word.replace(/'/g, "'\\''")}'`;
+}
+
+/** The commands of a `cmd /c` script, read as cmd reads them (a minimal dialect): outside a `"` quote, `^` escapes the next
+ *  character, `&`, `&&`, `||`, `|` and a line end separate commands, `( )` group them, and `>`, `>>`, `<` (with a handle
+ *  number, `2>&1`) redirect. `\` is a path separator, never an escape. Each scan is linear in the script's length. */
+function cmdCommands(script: string): CmdCommand[] {
+  const spans = cmdExpansions(script);
+  const out: CmdCommand[] = [];
+  let words: string[] = [];
+  let word = "";
+  let inWord = false;
+  let quote = false;
+  let raw = "";
+  let start = 0;
+  const endWord = () => {
+    if (inWord) words.push(posixWord(word.replace(/\\/g, "/"), words.length === 0));
+    word = "";
+    inWord = false;
+  };
+  const endCommand = (at: number) => {
+    endWord();
+    const text = raw.replace(/\\/g, "/").trim();
+    if (words.length) out.push({ text: words.join(" "), raw: text, dynamic: spans.some(([s, e]) => s < at && e >= start) });
+    words = [];
+    raw = "";
+  };
+  for (let i = 0; i < script.length; i++) {
+    const c = script[i];
+    if (quote) {
+      raw += c;
+      if (c === '"') quote = false; else word += c;
+      continue;
+    }
+    if (c === '"') { quote = true; inWord = true; raw += c; continue; }
+    if (c === "^") {
+      // `^` at a line end joins the next line on; before anything else it makes that character plain.
+      const n = script[i + 1];
+      if (n === "\r" || n === "\n") { i += n === "\r" && script[i + 2] === "\n" ? 2 : 1; continue; }
+      if (n !== undefined) { word += n; inWord = true; raw += n; i++; }
+      continue;
+    }
+    if (c === "&" || c === "|" || c === "\n" || c === "\r") {
+      endCommand(i);
+      if ((c === "&" || c === "|") && script[i + 1] === c) i++;
+      start = i + 1;
+      continue;
+    }
+    if (c === ">" || c === "<") {
+      // A handle number right before the operator belongs to it; `>&1` duplicates a handle rather than naming a file.
+      let op: string = c;
+      if (inWord && /^\d$/.test(word)) { op = word + c; word = ""; inWord = false; } else endWord();
+      if (c === ">" && script[i + 1] === ">") { op += ">"; i++; }
+      if (script[i + 1] === "&" && /^\d$/.test(script[i + 2] ?? "")) { op += `&${script[i + 2]}`; i += 2; }
+      words.push(op);
+      raw += ` ${op} `;
+      continue;
+    }
+    if (c === "(" || c === ")" || c === " " || c === "\t") { endWord(); raw += c; continue; }
+    // `@cmd` runs cmd without echoing it.
+    if (c === "@" && !inWord && words.length === 0) continue;
+    word += c;
+    inWord = true;
+    raw += c;
+  }
+  endCommand(script.length);
+  return out;
+}
+
+/** PowerShell text as the reader takes it: the backtick escape applied (``Re`move-Item`` runs Remove-Item) and `\` read as
+ *  the path separator it is there. */
+export function powershellText(text: string): string {
+  return text.replace(/`(.)/g, "$1").replace(/\\/g, "/");
+}
+
+/** The PowerShell script a `pwsh`/`powershell` command runs inline (`-Command`, `-c`, a decoded `-EncodedCommand`), as the
+ *  reader takes it; null for any other command, or one whose script is not in the text. */
+export function inlinePowerShell(sc: SimpleCommand): string | null {
+  if (sc.opaque || !POWERSHELLS.has(canonProgram(sc.program))) return null;
+  const script = powershellScriptArg(sc.argv);
+  return typeof script === "string" ? powershellText(script) : null;
 }
 
 /** `pwsh -Command …` / `-c …` (rest of argv is the script) or `-EncodedCommand <b64>`
@@ -799,7 +918,10 @@ export function decomposeShell(command: string, depth = 0, inherited: readonly s
     if (ps && argv.some((a, k) => PS_BLOCK_PARAMETER.test(a) && /^\$/.test(argv[k + 1] ?? ""))) out.push(...opaque(seg));
 
     const canon = canonProgram(program);
+    // A nested script is read in the language of the program that runs it: POSIX for a shell's `-c`, PowerShell for
+    // `pwsh`/`powershell` and Invoke-Expression, cmd's own for `cmd /c`.
     const nested = (script: string | null | undefined) => { if (script) out.push(...decomposeShell(script, depth + 1, assigns)); };
+    const nestedPowerShell = (script: string) => { out.push(...decomposeShell(powershellText(script), depth + 1, assigns, "powershell")); };
     if (SHELLS.has(canon)) {
       const script = shellScriptArg(argv);
       nested(script);
@@ -818,7 +940,12 @@ export function decomposeShell(command: string, depth = 0, inherited: readonly s
       // eslint-disable-next-line security/detect-unsafe-regex -- bounded: the nested optionals spell at most `-command`
       const script = argv.filter((a) => !/^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?$/i.test(a)).join(" ");
       if (script.trim() === "") out.push(...opaque(seg));
-      else nested(script);
+      else {
+        // Code handed over as a value (`iex $cmd`, `iex (iwr …)`) is only known at run time; read as PowerShell, a bare
+        // value is a statement that runs nothing, so it is marked opaque here.
+        if (script.trim().startsWith("$")) out.push(...opaque(seg));
+        nestedPowerShell(script);
+      }
     } else if (canon === "trap") {
       if (argv.length >= 2 && !argv[0].startsWith("-")) nested(argv[0]);
     } else if (canon === "su" || canon === "runuser" || canon === "script" || canon === "flock" || canon === "sg") {
@@ -839,11 +966,17 @@ export function decomposeShell(command: string, depth = 0, inherited: readonly s
       nested(parallelCommand(argv));
     } else if (canon === "cmd") {
       const script = cmdScriptArg(argv);
-      nested(script);
+      for (const part of script === null ? [] : cmdCommands(script)) {
+        // A variable cmd puts in first is only known at run time: the command is opaque, so a rule that would apply to it
+        // denies. It is also read as written, so what it names in plain text still counts.
+        if (part.dynamic) out.push(...opaque(part.raw));
+        nested(part.text);
+      }
     } else if (POWERSHELLS.has(canon)) {
+      // An encoded command that does not decode is opaque.
       const script = powershellScriptArg(argv);
       if (script === null) out.push(...opaque(seg));
-      else nested(script);
+      else if (script !== undefined) nestedPowerShell(script);
     } else if (canon === "find") {
       for (const script of findExecCommands(argv)) nested(script);
     }
