@@ -169,8 +169,10 @@ Expressions (each an object with one operator):
 Conditions (`when`): `has` (an option is given), `word` (a positional is one of), `defined`, `eq`, `in`, `matches`,
 `all`, `any`, `not`, `count` (`min`, `max`), `unknown_option`.
 
-Patterns are JavaScript regular expressions of at most 200 characters, with no back-references, look-behind or
-repeated group that holds a repeat; every word is cut to 512 characters before one runs.
+Patterns are JavaScript regular expressions of at most 200 characters that pass the same check as policy patterns
+(`@scopebond/policy-schema/pattern`): no back-references or look-behind, and no shape that can backtrack catastrophically
+(a repeated group that holds a repeat, alternatives under a repeat that begin alike, adjacent overlapping wildcards such as
+`.*.*`, three or more overlapping wildcards in a row); every word is cut to 512 characters before one runs.
 
 ### Rules
 
