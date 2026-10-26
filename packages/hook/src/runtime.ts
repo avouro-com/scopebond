@@ -3,8 +3,8 @@
 // signed by the machine key, decided against policy and countersigned — locally,
 // with no HTTP server and no Cloud dependency in 0.1.
 
-import { readFileSync, existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync, existsSync, realpathSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { createGateway, StaticPrincipalKeyRegistry, withCloudExporter, type CloudExporter } from "@scopebond/gateway";
 import { ensurePrivateDir, loadOrCreateAttester, openReceiptStore } from "@scopebond/gateway/node";
 import { createSigner } from "@scopebond/sdk";
@@ -153,7 +153,13 @@ const PROTECTED_WRITE = "^" + [...GUARDRAIL_WRITE, ...CI_WRITE].join("") + ".+";
 // `$env:ProgramFiles\…`, `${env:ProgramFiles}\…`, `%ProgramFiles(x86)%\…` and 8.3 short names (`PROGRA~1`, `SCOPEB~1`).
 // Reading it stays allowed. The hook does not read the registry, so an install moved elsewhere is not covered by this.
 const INSTALL_PARENT = `(?:${ci("programs")}|${ci("program files")}(?: \\(${ci("x86")}\\))?|${ci("progra")}~\\d|[%$]\\{?(?:${ci("env")}:)?${ci("program")}[^/]*)`;
-export const INSTALL_FOLDER = `(?!(?:.*/)?${INSTALL_PARENT}/(?:${ci("scopebond")}|${ci("scopeb")}~\\d)(?:/|$))`;
+/** The installer's folder alone: what the install folder covered before the npm packages joined it. */
+const INSTALL_FOLDER_PREV = `(?!(?:.*/)?${INSTALL_PARENT}/(?:${ci("scopebond")}|${ci("scopeb")}~\\d)(?:/|$))`;
+// The hook and agent installed with npm (or pnpm, yarn or bun) for every project: `<prefix>/lib/node_modules/@scopebond/hook`,
+// `%APPDATA%\npm\node_modules\@scopebond\agent`, `…/global/5/node_modules/…`. A coding agent that replaced that program would run
+// its own code as the hook. A project's own `node_modules` is not covered: it is the project's to install and remove.
+const NPM_INSTALL_PARENT = `(?:${ci("lib")}|${ci("npm")}|${ci("global")}(?:/\\d+)?)/${ci("node_modules")}/@${ci("scopebond")}/(?:${ci("hook")}|${ci("agent")})`;
+export const INSTALL_FOLDER = `(?!(?:.*/)?(?:${INSTALL_PARENT}/(?:${ci("scopebond")}|${ci("scopeb")}~\\d)|${NPM_INSTALL_PARENT})(?:/|$))`;
 /** What the always-on write protection compiled to before it covered the install folder: upgraded on load. */
 const GUARDRAIL_WRITE_PATTERN_PREV = "^" + GUARDRAIL_WRITE_PREV2.join("") + ".+";
 /** What it compiled to before it covered GitHub Copilot's hook settings: upgraded on load too. */
@@ -209,7 +215,7 @@ export function selfProtectionClauses(): Array<Record<string, unknown>> {
     {
       id: "protect-scopebond-write", type: "action_allowlist", mode: "enforce", action_types: ["file.write"],
       param_bounds: { path: { pattern: GUARDRAIL_WRITE_PATTERN } },
-      description: "Never change Scopebond's own settings, keys and policy, its installed program (the Scopebond folder under Programs or Program Files), the coding agents' hook settings, the hooks git runs (.git/hooks, .git/config, .husky), or the shell startup files (.zshrc, .bashrc, .profile, PowerShell profiles), and never switch Scopebond off (always on; it cannot be relaxed).",
+      description: "Never change Scopebond's own settings, keys and policy, its installed program (the Scopebond folder under Programs or Program Files, or the hook and agent installed globally with npm), the coding agents' hook settings, the hooks git runs (.git/hooks, .git/config, .husky), or the shell startup files (.zshrc, .bashrc, .profile, PowerShell profiles), and never switch Scopebond off (always on; it cannot be relaxed).",
     },
     {
       id: "protect-scopebond-read", type: "action_allowlist", mode: "enforce", action_types: ["file.read"],
@@ -217,6 +223,99 @@ export function selfProtectionClauses(): Array<Record<string, unknown>> {
       description: "Never read Scopebond's own folder, which holds this computer's key and connection, or the connection file (cloud.json) in a Scopebond folder (always on; it cannot be relaxed).",
     },
   ];
+}
+
+/** The policy with Scopebond's own protection as this hook defines it, whatever the rules file says: the file is the coding
+ *  agent's to reach in principle, so a floor clause removed from it, or edited to let more through, is put back. A floor clause
+ *  the file holds as defined here (its wording aside) is left where it is, so the policy reads and hashes as before. */
+export function withSelfProtection<T>(policy: T): T {
+  const p = policy as { clauses?: unknown };
+  if (!p || typeof p !== "object") return policy;
+  const floor = selfProtectionClauses();
+  const substance = (c: unknown): string => {
+    if (!c || typeof c !== "object") return "";
+    const rest: Record<string, unknown> = { ...(c as Record<string, unknown>) };
+    delete rest.description;
+    return JSON.stringify(rest);
+  };
+  const clauses = Array.isArray(p.clauses) ? [...p.clauses] : [];
+  const missing: Array<Record<string, unknown>> = [];
+  for (const want of floor) {
+    const at = clauses.findIndex((c) => (c as { id?: unknown } | null)?.id === want.id);
+    if (at < 0) { missing.push(want); continue; }
+    if (substance(clauses[at]) !== substance(want)) clauses[at] = want;
+    // A second clause under the same id could carry other bounds: only the one above stands.
+    for (let k = clauses.length - 1; k > at; k--) if ((clauses[k] as { id?: unknown } | null)?.id === want.id) clauses.splice(k, 1);
+  }
+  p.clauses = [...missing, ...clauses];
+  return policy;
+}
+
+/** The folders whose files Scopebond or a coding tool runs by: a write whose targets are unknown is refused in one of them. */
+const SETTINGS_FOLDERS = new Set([".scopebond", ".claude", ".cursor", ".codex", ".copilot"]);
+/** What an unnamed write may reach in a folder: the places the floor guards there, by name, so the floor decides as it does for a
+ *  named write. In the home folder, every coding tool's hook settings and Scopebond's own folder; inside a settings folder, the
+ *  files such a folder holds. */
+const HOME_PLACES = [".scopebond/policy.json", ".claude/settings.json", ".cursor/hooks.json", ".codex/hooks.json", ".codex/config.toml", ".copilot/hooks/scopebond.json", ".copilot/settings.json"];
+const INSIDE_PLACES = ["policy.json", "settings.json", "hooks.json", "config.toml", "hooks/scopebond.json"];
+const slashed = (p: string): string => p.replace(/\\/g, "/").replace(/\/+$/, "") || "/";
+
+/** A file write whose targets the command does not name (`tar -x`, `unzip`, `patch`, `git apply`) is judged by where it lands:
+ *  in the home folder or a folder above it, in Scopebond's own folder or a coding tool's settings folder (or one inside them), or
+ *  in a folder that holds Scopebond's own folder, it may replace what the floor guards, so it is recorded as a write of those
+ *  places and the floor refuses it. Anywhere else it stays as it was: recorded, not evaluated. */
+export function unknownWritePlaces(m: Mapped, cwd: string, homes: readonly string[], exists: (path: string) => boolean = existsSync): Mapped[] {
+  if (m.unknownWritesIn === undefined || m.intent.action_type !== "file.write" || m.evaluated) return [m];
+  const home = homes.map(slashed).find((h) => h !== "/") ?? "";
+  let folder = slashed(m.unknownWritesIn);
+  if (folder === "~" || folder.startsWith("~/")) folder = home ? home + folder.slice(1) : folder;
+  else if (!/^(?:\/|[A-Za-z]:)/.test(folder)) folder = slashed(`${slashed(cwd)}/${folder === "." ? "" : folder}`);
+  folder = slashed(folder.split("/").reduce<string[]>((out, s) => { if (s === "..") { if (out.length > 1) out.pop(); } else if (s !== "." && !(s === "" && out.length > 0)) out.push(s); return out; }, []).join("/"));
+  const lower = folder.toLowerCase();
+  const places: string[] = [];
+  const homeOrAbove = homes.map((h) => slashed(h).toLowerCase()).some((h) => h === lower || h.startsWith(lower === "/" ? "/" : lower + "/"));
+  if (homeOrAbove || folder.startsWith("~")) places.push(...HOME_PLACES.map((p) => `${folder}/${p}`));
+  else if (folder.split("/").some((s) => SETTINGS_FOLDERS.has(s.toLowerCase()))) places.push(...INSIDE_PLACES.map((p) => `${folder}/${p}`));
+  else if (exists(`${folder}/.scopebond`)) places.push(`${folder}/.scopebond/policy.json`);
+  if (places.length === 0) return [m];
+  return [m, ...places.map((path): Mapped => ({ intent: { action_type: "file.write", params: { path } }, evaluated: true, source: m.source }))];
+}
+
+/** Where `path` really is, links followed: the real path of the path itself when it exists, else of its nearest existing folder
+ *  with the rest appended. Null when it cannot be told. */
+function realPathOf(path: string): string | null {
+  const real = (p: string): string => { try { return realpathSync.native(p); } catch { return realpathSync(p); } };
+  let at = path;
+  const rest: string[] = [];
+  for (let depth = 0; depth < 64; depth++) {
+    try { return rest.length ? join(real(at), ...rest) : real(at); }
+    catch {
+      const up = dirname(at);
+      if (up === at) return null;
+      rest.unshift(basename(at));
+      at = up;
+    }
+  }
+  return null;
+}
+
+/** A file read or write through a link (a symbolic link, a junction) is judged where it lands as well: a path in an ordinary
+ *  folder that leads into Scopebond's own folder or a coding tool's settings is also recorded as that place, so the floor sees it.
+ *  A path only known at run time, or one that leads nowhere else, is left as it is. */
+export function realPathIntents(m: Mapped, cwd: string, homes: readonly string[]): Mapped[] {
+  const type = m.intent.action_type;
+  const path = m.intent.params.path;
+  if ((type !== "file.read" && type !== "file.write") || !m.evaluated || typeof path !== "string" || path === "" || /[*?[\]{}$`%]/.test(path)) return [m];
+  const home = homes.find((h) => h && h !== "/");
+  if (path.startsWith("~") && !(home && (path === "~" || /^~[\\/]/.test(path)))) return [m];
+  const absolute = path.startsWith("~") ? resolve(home!, path.slice(2)) : resolve(cwd, path);
+  const real = realPathOf(absolute);
+  if (real === null) return [m];
+  const same = (a: string, b: string): boolean => (process.platform === "win32" || process.platform === "darwin" ? a.toLowerCase() === b.toLowerCase() : a === b);
+  if (same(slashed(real), slashed(absolute))) return [m];
+  const rest: Mapped = { ...m, intent: { ...m.intent, params: { ...m.intent.params, path: slashed(real) } } };
+  delete rest.shown;
+  return [m, rest];
 }
 
 const PROTECTED_READ = "^" + [
@@ -275,6 +374,11 @@ const LEGACY_STARTER_PATTERNS: Record<string, string> = {
   [GUARDRAIL_WRITE_WITH_CONFIG]: GUARDRAIL_WRITE_PATTERN,
   [GUARDRAIL_FLOOR_NO_INSTALL]: GUARDRAIL_WRITE_PATTERN,
   [GUARDRAIL_WRITE_PATTERN_NO_STARTUP]: GUARDRAIL_WRITE_PATTERN,
+  // The same floors as written while the install folder was the installer's alone.
+  [GUARDRAIL_WRITE_PATTERN_PREV2.replace(INSTALL_FOLDER, INSTALL_FOLDER_PREV)]: GUARDRAIL_WRITE_PATTERN,
+  [GUARDRAIL_WRITE_WITH_CONFIG.replace(INSTALL_FOLDER, INSTALL_FOLDER_PREV)]: GUARDRAIL_WRITE_PATTERN,
+  [GUARDRAIL_WRITE_PATTERN_NO_STARTUP.replace(INSTALL_FOLDER, INSTALL_FOLDER_PREV)]: GUARDRAIL_WRITE_PATTERN,
+  [GUARDRAIL_WRITE_PATTERN.replace(INSTALL_FOLDER, INSTALL_FOLDER_PREV)]: GUARDRAIL_WRITE_PATTERN,
   [GUARDRAIL_READ_PATTERN_PREV]: GUARDRAIL_READ_PATTERN,
   [SAFE_SHELL_PREV]: SAFE_SHELL,
   "^(?!(?:main|master)$)(?!release/).+": SAFE_REF,
@@ -390,7 +494,8 @@ export function createHookRuntime(config: RuntimeConfig) {
   const homes = config.homeFolders ?? homeFolders();
   // The rules of the packs in force (verified on this call) join the policy here, on the modes this computer's rules or its
   // workspace's set (pack-rules.ts).
-  const policy = maskHomeInPolicy(withPackRules(upgradeStarterPolicy(readPolicyFile(config.policyPath)), enforcedRuleIds(dirname(config.policyPath)), undefined, packRuleAdjustmentsAt(dirname(config.policyPath))), homes);
+  // Scopebond's own protection is put back last, so neither the file nor a pack can leave it out or weaken it.
+  const policy = withSelfProtection(maskHomeInPolicy(withPackRules(upgradeStarterPolicy(readPolicyFile(config.policyPath)), enforcedRuleIds(dirname(config.policyPath)), undefined, packRuleAdjustmentsAt(dirname(config.policyPath))), homes));
   /** The action as it is signed: the account's home folder in every parameter (the working folder, a path, the
    *  command line) replaced by `~`, and another account's name by `~other`. Root scoping has already run on the
    *  absolute paths. */
@@ -632,7 +737,10 @@ export function createHookRuntime(config: RuntimeConfig) {
     /** Decide a whole tool call. A shell call decomposes into several simple
      *  commands; every one is recorded, and a single deny denies the call. */
     async evaluate(mapped: Mapped | Mapped[], options: { groupKey?: string } = {}): Promise<Decision> {
-      const raw = Array.isArray(mapped) ? mapped : [mapped];
+      // A write whose targets are unknown, landing where the floor guards files, is judged as a write of those files.
+      // A file reached through a link is judged where it lands as well.
+      const at = config.cwd ?? process.cwd();
+      const raw = (Array.isArray(mapped) ? mapped : [mapped]).flatMap((m) => unknownWritePlaces(m, at, homes)).flatMap((m) => realPathIntents(m, at, homes));
       if (raw.length === 0) return { decision: "not_evaluated", reason: "no action", receipts: [] };
       // Every intent of one tool call carries one parent group id, so the receipts of a
       // decomposed call (a command, its file reads and writes, a rename destination)

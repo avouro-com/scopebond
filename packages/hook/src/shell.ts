@@ -432,8 +432,10 @@ function stripPrefixes(input: string[]): { tokens: string[]; wrappers: Wrapper[]
 }
 
 /** A program word whose name is only known at run time: a variable (`$r`), an
- *  ANSI-C string (`$'\x72m'`) or a command substitution in its last path segment. */
-const isDynamicProgram = (word: string): boolean => /[$`]/.test(word.replace(/^.*\//, ""));
+ *  ANSI-C string (`$'\x72m'`) or a command substitution in its last path segment; or a word the shell turns into
+ *  something else before it runs, so the program is not the word as written: a brace list (`{cp,a,b}` runs `cp a b`) or a
+ *  function defined in place (`f(){ …; }`). */
+const isDynamicProgram = (word: string): boolean => /[$`]/.test(word.replace(/^.*\//, "")) || /[{}()]/.test(word);
 
 /** The script run by `su -c …`, `script -qc …`, `runuser … -c`, `flock -c …`: the
  *  value of `-c`/`--command` (also as the last letter of a short-option cluster). */
