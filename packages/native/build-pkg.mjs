@@ -35,6 +35,9 @@ export const PACKAGE_ID = "com.scopebond.agent";
 /** Where each file goes on the Mac, and the file it comes from (null: the executable given). */
 export const PAYLOAD = [
   { path: "usr/local/bin/scopebond-agent", from: null, mode: 0o755 },
+  // The root updater's own copy of the executable, in a folder only root can write: the LaunchDaemon runs this one, never
+  // the copy in /usr/local/bin, which a person may own on a Mac where another tool took over /usr/local.
+  { path: "Library/PrivilegedHelperTools/com.scopebond.updater", from: null, mode: 0o755 },
   { path: "Library/LaunchAgents/com.scopebond.agent.plist", from: join(macos, "com.scopebond.agent.plist"), mode: 0o644 },
   { path: "Library/LaunchDaemons/com.scopebond.updater.plist", from: join(macos, "com.scopebond.updater.plist"), mode: 0o644 },
   { path: "Library/Application Support/Scopebond/uninstall.sh", from: join(macos, "uninstall.sh"), mode: 0o755 },

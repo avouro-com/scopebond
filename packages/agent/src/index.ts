@@ -65,7 +65,7 @@ export {
 } from "./engine-update.js";
 export { maintainIntel, readIntelTarget, COMPONENT_SIGNATURE_HEADER, COMPONENT_KEY_ID_HEADER, type IntelTarget, type IntelOutcome, type IntelInstallOptions } from "./intel-install.js";
 export {
-  MAC_UPDATER_LABEL, MAC_UPDATER_COMMAND, MAC_UPDATER_PLIST, MAC_UPDATER_PATHS, MAC_INSTALLER_PUBLISHER, macPackageName, macAutoUpdate, macPackageSignature,
+  MAC_UPDATER_LABEL, MAC_UPDATER_COMMAND, MAC_UPDATER_PLIST, MAC_UPDATER_EXE, MAC_UPDATER_PATHS, readRequest, MAC_INSTALLER_PUBLISHER, macPackageName, macAutoUpdate, macPackageSignature,
   requestMacUpdate, readMacUpdateResult, takeMacUpdateResult, runMacUpdater, hasMacUpdater,
 } from "./mac-update.js";
 export type { MacUpdaterPaths, MacUpdaterOptions } from "./mac-update.js";

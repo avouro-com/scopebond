@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FIRST_SIGNIN_FILE, LABEL, MAC_PACKAGE_EXE, MAC_PACKAGE_UNINSTALL, MAC_UPDATER_COMMAND, MAC_UPDATER_LABEL, MAC_UPDATER_PATHS, MAC_UPDATER_PLIST } from "@scopebond/agent";
+import { FIRST_SIGNIN_FILE, LABEL, MAC_PACKAGE_EXE, MAC_PACKAGE_UNINSTALL, MAC_UPDATER_COMMAND, MAC_UPDATER_EXE, MAC_UPDATER_LABEL, MAC_UPDATER_PATHS, MAC_UPDATER_PLIST } from "@scopebond/agent";
 import { buildSea } from "../build-sea.mjs";
 import { buildPkg, distributionXml, MIN_MACOS, PACKAGE_ID, PAYLOAD, TRAY_BUNDLE_ID, trayInfoPlist } from "../build-pkg.mjs";
 import { installerVersion } from "../version.mjs";
@@ -32,11 +32,13 @@ const PLIST_PATH = `/Library/LaunchAgents/${LABEL}.plist`;
 const UNINSTALL_PATH = "/Library/Application Support/Scopebond/uninstall.sh";
 
 test("the package's files agree with the agent: its path, its autostart label and its removal command", () => {
-  assert.deepEqual(PAYLOAD.map((f) => `/${f.path}`), [MAC_PACKAGE_EXE, PLIST_PATH, MAC_UPDATER_PLIST, UNINSTALL_PATH]);
+  assert.deepEqual(PAYLOAD.map((f) => `/${f.path}`), [MAC_PACKAGE_EXE, MAC_UPDATER_EXE, PLIST_PATH, MAC_UPDATER_PLIST, UNINSTALL_PATH]);
   // The updater the package runs as root: the agent's own command, started when a request lands in the agent's folder.
   const daemon = read("com.scopebond.updater.plist");
   assert.ok(daemon.includes(`<key>Label</key><string>${MAC_UPDATER_LABEL}</string>`));
-  assert.ok(daemon.includes(`<string>${MAC_PACKAGE_EXE}</string>\n    <string>${MAC_UPDATER_COMMAND}</string>`));
+  // It runs the root-only copy in /Library/PrivilegedHelperTools, never /usr/local/bin (which a person may own).
+  assert.ok(daemon.includes(`<string>${MAC_UPDATER_EXE}</string>\n    <string>${MAC_UPDATER_COMMAND}</string>`));
+  assert.ok(!daemon.includes(MAC_PACKAGE_EXE));
   assert.ok(daemon.includes(`<array><string>${MAC_UPDATER_PATHS.requests}</string></array>`), "WatchPaths is the requests folder");
   const postinstall = read("scripts", "postinstall");
   assert.ok(postinstall.includes('/bin/chmod 1733 "$SUPPORT/update-requests"') && postinstall.includes('/bin/chmod 0700 "$SUPPORT/updater"'));
@@ -142,6 +144,7 @@ test("the package installs the executable, the LaunchAgent and the uninstall scr
     ["./Library/Application Support/Scopebond/uninstall.sh", "-rwxr-xr-x", "root", "wheel"],
     ["./Library/LaunchAgents/com.scopebond.agent.plist", "-rw-r--r--", "root", "wheel"],
     ["./Library/LaunchDaemons/com.scopebond.updater.plist", "-rw-r--r--", "root", "wheel"],
+    ["./Library/PrivilegedHelperTools/com.scopebond.updater", "-rwxr-xr-x", "root", "wheel"],
     ["./usr/local/bin/scopebond-agent", "-rwxr-xr-x", "root", "wheel"],
     ...(trayApp ? [
       ["./Applications/Scopebond.app/Contents/Info.plist", "-rw-r--r--", "root", "wheel"],
@@ -156,6 +159,8 @@ test("the package installs the executable, the LaunchAgent and the uninstall scr
   const payload = join(component, "Payload");
   const installed = join(payload, "usr", "local", "bin", "scopebond-agent");
   assert.equal(sha256(installed), sha256(exe));
+  // The root updater's own copy, in a folder only root can write, is the same signed executable.
+  assert.equal(sha256(join(payload, ...MAC_UPDATER_EXE.split("/").filter(Boolean))), sha256(exe));
   const verify = spawnSync("codesign", ["--verify", "--strict", installed], { encoding: "utf8" });
   assert.equal(verify.status, 0, verify.stderr);
   const version = spawnSync(installed, ["--version"], { encoding: "utf8" });
@@ -181,7 +186,7 @@ test("the package installs the executable, the LaunchAgent and the uninstall scr
   assert.equal(spawnSync("plutil", ["-lint", updater], { encoding: "utf8" }).status, 0);
   assert.deepEqual(JSON.parse(spawnSync("plutil", ["-convert", "json", "-o", "-", updater], { encoding: "utf8" }).stdout), {
     Label: MAC_UPDATER_LABEL,
-    ProgramArguments: [MAC_PACKAGE_EXE, MAC_UPDATER_COMMAND],
+    ProgramArguments: [MAC_UPDATER_EXE, MAC_UPDATER_COMMAND],
     WatchPaths: [MAC_UPDATER_PATHS.requests],
     ThrottleInterval: 60,
     ProcessType: "Background",
@@ -250,7 +255,7 @@ test("the package installs for every user and starts the agent, upgrades over it
   if (install.status !== 0) removed();
   assert.equal(install.status, 0, install.stdout + install.stderr);
   try {
-    for (const file of [MAC_PACKAGE_EXE, PLIST_PATH, MAC_UPDATER_PLIST, UNINSTALL_PATH]) {
+    for (const file of [MAC_PACKAGE_EXE, MAC_UPDATER_EXE, PLIST_PATH, MAC_UPDATER_PLIST, UNINSTALL_PATH]) {
       assert.ok(existsSync(file), `installed: ${file}`);
       assert.equal(statSync(file).uid, 0, `${file} belongs to root`);
     }
@@ -319,7 +324,7 @@ test("the package installs for every user and starts the agent, upgrades over it
   assert.ok(uninstall.status === 0 || uninstall.status === 75, `exit ${uninstall.status}: ${uninstall.stdout}${uninstall.stderr}`);
   assert.match(uninstall.stdout, /Removed the Scopebond Agent/);
   assert.match(uninstall.stdout, /Your Scopebond folder .* stays|No Scopebond folder is left/, "the last sentence names the folder");
-  for (const file of [MAC_PACKAGE_EXE, PLIST_PATH, MAC_UPDATER_PLIST, dirname(UNINSTALL_PATH), APP, TRAY_PLIST_PATH]) assert.ok(!existsSync(file), `removed: ${file}`);
+  for (const file of [MAC_PACKAGE_EXE, MAC_UPDATER_EXE, PLIST_PATH, MAC_UPDATER_PLIST, dirname(UNINSTALL_PATH), APP, TRAY_PLIST_PATH]) assert.ok(!existsSync(file), `removed: ${file}`);
   assert.notEqual(sudo(["launchctl", "print", `system/${MAC_UPDATER_LABEL}`]).status, 0, "the updater is no longer loaded");
   assert.notEqual(spawnSync("pkgutil", ["--pkg-info", PACKAGE_ID], { encoding: "utf8" }).status, 0, "the receipt is forgotten");
   assert.notEqual(loaded(uid).status, 0, "launchd no longer has the agent");

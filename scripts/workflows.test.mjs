@@ -228,6 +228,43 @@ test("native signing: no job that can sign runs the installer tools, and the ins
   }
 });
 
+/** A job that holds a credential worth stealing: it can mint an OIDC token, runs in a deployment environment, or reads a
+ *  secret other than the run's own token. */
+const holdsCredential = (job) => /id-token: write/.test(job.header) || /^ {4}environment:/m.test(job.header)
+  || job.steps.some((step) => /secrets\.(?!GITHUB_TOKEN\b)/.test(step));
+
+test("no job that holds a signing or publishing credential restores a cache or runs dependency scripts", () => {
+  let checked = 0;
+  for (const name of workflowNames()) {
+    for (const job of readWorkflow(name).jobs.filter(holdsCredential)) {
+      checked += 1;
+      for (const step of job.steps) {
+        const where = `${name} ${job.name}`;
+        assert.doesNotMatch(step, /uses:\s*actions\/cache[@/]/, `${where}: no actions/cache in a job that holds a credential`);
+        assert.doesNotMatch(step, /^\s+cache:/m, `${where}: no setup-* dependency cache in a job that holds a credential`);
+        if (/uses:\s*actions\/setup-node@/.test(step)) assert.match(step, /package-manager-cache: false/, `${where}: setup-node restores no package-manager cache`);
+        if (/uses:\s*azure\/artifact-signing-action@/.test(step)) assert.match(step, /cache-dependencies: false/, `${where}: the signing action restores nothing from the run's cache`);
+        if (/pnpm install|npm (install|ci)\b/.test(step)) assert.match(step, /--ignore-scripts/, `${where}: installs run no dependency scripts`);
+      }
+    }
+  }
+  assert.ok(checked >= 4, "the release, native signing and scorecard jobs are checked");
+});
+
+test("native signing: the updater key signs in a job of its own, with no Azure sign-in, OIDC token or install", () => {
+  const native = readWorkflow("native-release.yml");
+  const sealing = native.jobs.filter((job) => job.steps.some((step) => /UPDATER_SIGNING_KEY/.test(step)));
+  assert.equal(sealing.length, 1, "one job holds the updater key");
+  const [seal] = sealing;
+  assert.doesNotMatch(seal.header, /id-token: write/, "the updater-key job cannot ask for an OIDC token");
+  for (const step of seal.steps) {
+    assert.doesNotMatch(step, /uses:\s*azure\//, "the updater-key job signs in to nothing");
+    assert.doesNotMatch(step, /pnpm|npm (install|ci)|cargo|dotnet|wix/, "the updater-key job installs and builds nothing");
+    const action = step.match(/uses:\s*([^@\s]+)@/)?.[1];
+    if (action) assert.ok(["actions/checkout", "actions/setup-node", "actions/download-artifact", "actions/upload-artifact"].includes(action), `the updater-key job runs no ${action}`);
+  }
+});
+
 test("native signing: the signed update manifest names the commit it was built from", () => {
   const native = readWorkflow("native-release.yml");
   const manifest = native.jobs.flatMap((job) => job.steps).find((step) => /manifest\.mjs/.test(step));

@@ -5,7 +5,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -132,4 +133,34 @@ test("the asking agent reads the updater's result once, as on Windows: a package
   assert.equal(readUpdatePending(dir), null);
   assert.equal(failedUpdate(dir, Date.parse("2026-10-24T12:03:00Z"))?.version, NEW);
   assert.deepEqual(lines, [`the update to ${NEW} was not installed: the package's signature is not valid`]);
+});
+
+// The root updater reads people's request files: never through a link, never waiting on a pipe, never more than 1 KiB.
+// Before, lstat then readFile let a request swapped for a link to a pipe hang the root updater.
+test("a request file is read only when it is itself a small regular file", async () => {
+  const { readRequest, MAC_UPDATER_EXE } = await import("../dist/index.js");
+  const paths = updater();
+  const ok = join(paths.requests, "501-0123456789abcdef.json");
+  writeFileSync(ok, JSON.stringify({ version: "1.2.3" }));
+  assert.equal(readRequest(ok), JSON.stringify({ version: "1.2.3" }));
+  const big = join(paths.requests, "502-0123456789abcdef.json");
+  writeFileSync(big, "x".repeat(2048));
+  assert.equal(readRequest(big), null);
+  const target = join(paths.requests, "..", "elsewhere.json");
+  writeFileSync(target, JSON.stringify({ version: "9.9.9" }));
+  const link = join(paths.requests, "503-0123456789abcdef.json");
+  let linked = true;
+  try { symlinkSync(target, link); } catch { linked = false; }
+  // macOS and Linux only: Windows has no O_NOFOLLOW, and the root updater runs on macOS alone.
+  if (linked && process.platform !== "win32") assert.throws(() => readRequest(link), "a link is not followed");
+  if (process.platform !== "win32") {
+    const fifo = join(paths.requests, "504-0123456789abcdef.json");
+    spawnSync("mkfifo", [fifo]);
+    assert.equal(readRequest(fifo), null, "a pipe is opened without waiting and not read");
+  }
+  // The LaunchDaemon runs the root-only copy, the one the update-daemon command insists on.
+  assert.equal(MAC_UPDATER_EXE, "/Library/PrivilegedHelperTools/com.scopebond.updater");
+  const plist = readFileSync(join(import.meta.dirname, "..", "..", "native", "macos", "com.scopebond.updater.plist"), "utf8");
+  assert.ok(plist.replace(/\s+/g, "").includes(`<string>${MAC_UPDATER_EXE}</string><string>update-daemon</string>`), "the daemon runs the helper's update-daemon");
+  assert.doesNotMatch(plist, /\/usr\/local\/bin/);
 });
