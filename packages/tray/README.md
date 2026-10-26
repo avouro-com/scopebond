@@ -50,8 +50,9 @@ installer package (`packages/native/build-pkg.mjs`). There it:
     computer* — for the workspace's number of days, or after an admin approves —, *Ask an admin to unblock it instead*), a reason with a live
     count of the characters still needed, and a button named for the result (*Allow once*, *Allow for 15 minutes*, *Always
     allow*, *Send request*). The tray checks the answer (the choice is offered, the reason long enough and at most 500
-    characters) and sends it to the agent's `POST /blocked/answer`, which checks it again and applies it exactly as the
-    window's answer: the allowance or the request on this computer, sent to the workspace signed by this computer's key.
+    characters) and sends it to the agent's `POST /blocked/answer`, which checks it again and applies it: *Allow once*
+    on this computer, and any longer choice as a request an admin approves (with the action allowed once meanwhile),
+    sent to the workspace signed by this computer's key. The agent offers the lengths only as such requests.
     The block then says what happened: "Allowed once · Recorded and sent to Acme". Where an admin decides, the form
     has nothing to choose: the action, the reason and *Send request*, and afterwards "Request sent · you'll see the
     answer under Requests". Where the workspace sets the one length, there is nothing to choose either: one line names
@@ -153,11 +154,13 @@ stop on purpose, another agent starting, no agent program, failed restarts withi
 - The tray only calls short local routes the agent's model names (a path such as `/flush`, never an address), and the
   status panel loads only the files built into the program, under a content security policy that allows nothing else.
 - The tray's Unblock form answers through the same channel and token (`POST /blocked/answer`), so a program already
-  running as the person, which can read the token file, could send such an answer too: the same trust as the person's
-  own command line. What it can do is bounded the same way the window's answer is: only a choice the workspace offers a
-  person for that block, with a reason as long as the workspace asks for, within the daily limit, never for Scopebond's
-  own protection or a rule on Block, and every answer is recorded on this computer and sent to the workspace with its
-  reason. The hook's own protection stops a coding agent from reading the Scopebond folder through its tools.
+  running as the person, which can read the token file, could send such an answer too. So the agent applies only the
+  next try of that one action from an answer on the channel, and marks the allowance `local_unverified` in the record it
+  sends; a longer choice (a length, always, similar commands) is sent to the workspace as a request a person approves
+  there, and is refused on a computer not connected to one. What an answer can do is also bounded the way the window's
+  answer is: only a choice the workspace offers a person for that block, with a reason as long as the workspace asks
+  for, within the daily limit, never for Scopebond's own protection or a rule on Block, and every answer is recorded on
+  this computer and sent to the workspace with its reason. The hook's own protection stops a coding agent from reading the Scopebond folder through its tools.
 - Apart from the Unblock form above, the tray asks nothing of the agent that the agent's own command line cannot do. With
   an agent that does not say what may be done, an earlier block is answered in its Scopebond window, which only the
   person can answer.

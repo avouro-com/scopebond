@@ -1,13 +1,14 @@
-// From the tray's own form: a person answers an earlier block (allow once, for 15 minutes, always, or ask an admin) with a
-// reason. The agent checks it again as the Scopebond window would, applies it as the window's answer is applied, and sends
-// it to the workspace signed by this computer's key. The Allowed and Requests lists show what came of it.
+// From the tray's own form: a person answers an earlier block (allow once, or ask an admin) with a reason. The agent checks
+// it again as the Scopebond window would, applies it, and sends it to the workspace signed by this computer's key. A longer
+// choice is never applied from the tray's channel (local-approvals.test.mjs). The Allowed and Requests lists show what came
+// of it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MANAGED_DOC_FILE, readAllowances, readBlocked, readRequests, makeAllowance } from "@scopebond/hook";
+import { MANAGED_DOC_FILE, actOnBlocked, readAllowances, readBlocked, readRequests, makeAllowance } from "@scopebond/hook";
 import { callAgent } from "../dist/index.js";
 import { parseBlockedAnswer, answerText, readTraySettings, writeTraySettings, settleTraySettings } from "../dist/service.js";
 import { computer, blockActions, serviceFor } from "./tray-helpers.mjs";
@@ -43,7 +44,7 @@ test("allow once from the tray: checked as the window would be, applied once, th
     assert.equal((await answer(dir, { action_id: id, choice: "once", reason: "too short" })).outcome, "reason_short", "the workspace's minimum (12)");
     assert.equal((await answer(dir, { action_id: id, choice: "once", reason: 42 })).outcome, "invalid");
     const done = await answer(dir, { action_id: id, choice: "once", reason: REASON });
-    assert.deepEqual(done, { outcome: "allowed", choice: "once", text: "Allowed once: rm -rf ../build (in /repo) · recorded on this computer" });
+    assert.deepEqual(done, { outcome: "allowed", choice: "once", approval: "local_unverified", text: "Allowed once: rm -rf ../build (in /repo) · recorded on this computer" });
     const made = readAllowances(dir).at(-1);
     assert.equal(made.once, true);
     assert.equal(made.reason, REASON);
@@ -60,18 +61,16 @@ test("allow once from the tray: checked as the window would be, applied once, th
   } finally { await service.stop(); }
 });
 
-test("only a choice the workspace offers is applied; always waits for an admin and covers 15 minutes meanwhile", async () => {
+test("only a choice the workspace offers is applied; always is not applied from the tray's channel", async () => {
   const { dir, id } = await blockedComputer({ "destructive-shell": { mode: "override", override: { reason_min: 12, minutes: 0, daily_limit: 5, harness_prompt: false, always: "needs_admin", always_days: 14 } } });
   const service = await serviceFor(dir);
   try {
     assert.equal((await answer(dir, { action_id: id, choice: "ask", reason: REASON })).outcome, "not_offered", "asking is not on");
     assert.equal(readRequests(dir).length, 0);
     const done = await answer(dir, { action_id: id, choice: "always", reason: REASON });
-    assert.equal(done.outcome, "proposed");
-    assert.equal(done.text, "Allowed for 15 minutes while an admin decides on 14 days: rm -rf ../build (in /repo) · recorded on this computer");
-    const { allowances } = await callAgent(dir, "GET", "/allowances", undefined, 10_000);
-    assert.deepEqual(allowances.map((a) => [a.choice, a.state, a.needs_admin]).sort(), [["always", "proposed", true], ["fifteen", "active", false]]);
-    assert.ok(allowances.every((a) => a.what === "rm -rf ../build (in /repo)"));
+    assert.equal(done.outcome, "needs_workspace");
+    assert.equal(done.text, "This computer is not connected to a workspace, so it can only be allowed once from here.");
+    assert.deepEqual((await callAgent(dir, "GET", "/allowances", undefined, 10_000)).allowances, []);
   } finally { await service.stop(); }
 });
 
@@ -133,13 +132,14 @@ test("an answer from the tray reaches the workspace signed by this computer, as 
   const service = await serviceFor(dir);
   try {
     writeFileSync(join(dir, MANAGED_DOC_FILE), doc); // as the workspace sent it, whatever the first rules check did
-    const done = await answer(dir, { action_id: id, choice: "fifteen", reason: REASON });
+    const done = await answer(dir, { action_id: id, choice: "once", reason: REASON });
     assert.equal(done.outcome, "allowed");
-    assert.match(done.text, /^Allowed for 15 minutes: .* · recorded in /);
+    assert.match(done.text, /^Allowed once: .* · recorded in /);
     await service.cycleNow();
     const sent = posted.find((p) => p.path === "/v1/allowances");
     assert.ok(sent, "the allowance was sent");
     assert.equal(sent.body.record.reason, REASON);
+    assert.equal(sent.body.record.approval, "local_unverified");
     assert.ok(sent.body.signature && sent.body.kid);
     assert.ok(readAllowances(dir).at(-1).sent_at);
   } finally { await service.stop(); server.close(); }
@@ -181,11 +181,12 @@ test("unblocking automatically, reviewed later: one length, applied at once, and
   const service = await serviceFor(dir);
   try {
     const before = (await callAgent(dir, "GET", "/tray", undefined, 10_000)).tray;
-    assert.deepEqual(before.recent_blocks[0].offers, { once: false, fifteen: true, hour: false, tomorrow: false, quiet: true, always: false, always_days: null, always_needs_admin: false, ask: false, reviewed: true, similar: null });
+    // From the tray's channel nothing longer than once is applied, and once is not what the workspace set.
+    assert.deepEqual(before.recent_blocks[0].offers, { once: false, fifteen: false, hour: false, tomorrow: false, quiet: true, always: false, always_days: null, always_needs_admin: false, ask: false, reviewed: true, similar: null });
     assert.equal((await answer(dir, { action_id: id, choice: "once", reason: REASON })).outcome, "not_offered", "only the length the workspace set");
-    const done = await answer(dir, { action_id: id, choice: "fifteen", reason: REASON });
-    assert.equal(done.outcome, "allowed");
-    assert.match(done.text, /^Unblocked until \d{1,2}:\d{2} [AP]M: .* · an admin will review it$/);
+    assert.equal((await answer(dir, { action_id: id, choice: "fifteen", reason: REASON })).outcome, "needs_workspace");
+    // The Scopebond window's answer (the hook's own path) applies it.
+    assert.equal(actOnBlocked(dir, id, { decision: "allow", reason: REASON, lasts: "15m" }).outcome, "allowed");
     let { allowances } = await callAgent(dir, "GET", "/allowances", undefined, 10_000);
     assert.equal(allowances.length, 1);
     assert.equal(allowances[0].choice, "fifteen");
@@ -210,8 +211,8 @@ test("stop allowing from the tray: the person's allowance ends at once and leave
   const { dir, id } = await blockedComputer();
   const service = await serviceFor(dir);
   try {
-    await answer(dir, { action_id: id, choice: "fifteen", reason: REASON });
-    const [mine] = (await callAgent(dir, "GET", "/allowances", undefined, 10_000)).allowances;
+    await answer(dir, { action_id: id, choice: "once", reason: REASON });
+    const [mine] =(await callAgent(dir, "GET", "/allowances", undefined, 10_000)).allowances;
     assert.equal(mine.by, "person");
     const stopped = await callAgent(dir, "POST", "/allowances/stop", { id: mine.id }, 10_000);
     assert.deepEqual(stopped, { outcome: "stopped", text: "Stopped allowing rm -rf ../build (in /repo) on this computer" });
@@ -230,7 +231,7 @@ test("where the workspace asks for no reason, the tray's answer needs none; a mi
   const { dir, id } = await blockedComputer({ "destructive-shell": { mode: "override", override: { reason_min: 0, minutes: 0, daily_limit: 5, harness_prompt: false, always: "at_once", requests: true } } });
   const service = await serviceFor(dir);
   try {
-    const done = await answer(dir, { action_id: id, choice: "always" });
+    const done = await answer(dir, { action_id: id, choice: "once" });
     assert.equal(done.outcome, "allowed");
     const made = readAllowances(dir).at(-1);
     assert.equal(made.reason_length, 0, "recorded with no reason");

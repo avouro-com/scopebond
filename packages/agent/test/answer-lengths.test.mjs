@@ -3,7 +3,7 @@
 // choices "hour" and "tomorrow" make allowances that last an hour and 24 hours. Without them, nothing changes.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readAllowances, readBlocked } from "@scopebond/hook";
+import { actOnBlocked, readAllowances, readBlocked } from "@scopebond/hook";
 import { callAgent } from "../dist/index.js";
 import { parseBlockedAnswer, answerText } from "../dist/service.js";
 import { livePrompt } from "../dist/live-prompt.js";
@@ -26,7 +26,7 @@ test("the form's new choices are read, and say how long", () => {
   assert.match(answerText("allowed", "hour", 30, "Acme", true, true, now), /^Unblocked until \d{1,2}:\d\d [AP]M · an admin will review it$/);
 });
 
-test("the workspace's lengths: offered in the tray, applied for 1 hour and until tomorrow, 15 minutes not offered", async () => {
+test("the workspace's lengths: not applied from the tray's channel (only once is); the Scopebond window's answer makes 1 hour and until tomorrow", async () => {
   const dir = computer({ "destructive-shell": { mode: "override", override: lengthsTerms(["once", "1h", "tomorrow", "30d"]) } });
   await blockActions(dir, [{ tool_name: "Bash", tool_input: { command: "rm -rf ../a" } }, { tool_name: "Bash", tool_input: { command: "rm -rf ../b" } }]);
   const [b, a] = readBlocked(dir).slice(-2).reverse();
@@ -34,15 +34,17 @@ test("the workspace's lengths: offered in the tray, applied for 1 hour and until
   try {
     const { tray } = await callAgent(dir, "GET", "/tray", undefined, 10_000);
     const row = tray.recent_blocks.find((r) => r.action_id === a.id);
-    assert.deepEqual(row.offers, { once: true, fifteen: false, hour: true, tomorrow: true, quiet: true, always: true, always_days: 30, always_needs_admin: false, ask: true, reviewed: false, similar: null });
+    // The channel cannot show a person answered: a length would be a request to an admin, which needs a workspace.
+    assert.deepEqual(row.offers, { once: true, fifteen: false, hour: false, tomorrow: false, quiet: true, always: false, always_days: null, always_needs_admin: false, ask: true, reviewed: false, similar: null });
     assert.equal(row.outcome, "unblock");
     assert.equal((await answer(dir, { action_id: a.id, choice: "fifteen", reason: REASON })).outcome, "not_offered");
-    const hour = await answer(dir, { action_id: a.id, choice: "hour", reason: REASON });
-    assert.equal(hour.outcome, "allowed");
-    assert.match(hour.text, /^Allowed for 1 hour: .+ · recorded on this computer$/);
+    assert.equal((await answer(dir, { action_id: a.id, choice: "hour", reason: REASON })).outcome, "needs_workspace");
+    assert.equal((await answer(dir, { action_id: b.id, choice: "tomorrow", reason: REASON })).outcome, "needs_workspace");
+    assert.deepEqual(readAllowances(dir), []);
+    // The Scopebond window's answer (the hook's own path) still makes the lengths.
+    assert.equal(actOnBlocked(dir, a.id, { decision: "allow", reason: REASON, lasts: "1h" }).outcome, "allowed");
     assert.ok(Math.abs(lastsFor(readAllowances(dir).at(-1)) - HOUR) < 1000);
-    const tomorrow = await answer(dir, { action_id: b.id, choice: "tomorrow", reason: REASON });
-    assert.equal(tomorrow.outcome, "allowed");
+    assert.equal(actOnBlocked(dir, b.id, { decision: "allow", reason: REASON, lasts: "tomorrow" }).outcome, "allowed");
     assert.ok(Math.abs(lastsFor(readAllowances(dir).at(-1)) - 24 * HOUR) < 1000);
     const { allowances } = await callAgent(dir, "GET", "/allowances", undefined, 10_000);
     assert.deepEqual(allowances.map((x) => x.choice).sort(), ["hour", "tomorrow"]);
@@ -56,7 +58,7 @@ test("legacy terms: hour and tomorrow are offered as false and refused", async (
   const service = await serviceFor(dir);
   try {
     const { tray } = await callAgent(dir, "GET", "/tray", undefined, 10_000);
-    assert.deepEqual(tray.recent_blocks[0].offers, { once: true, fifteen: true, hour: false, tomorrow: false, quiet: true, always: true, always_days: 14, always_needs_admin: true, ask: true, reviewed: false, similar: null });
+    assert.deepEqual(tray.recent_blocks[0].offers, { once: true, fifteen: false, hour: false, tomorrow: false, quiet: true, always: false, always_days: null, always_needs_admin: false, ask: true, reviewed: false, similar: null });
     assert.equal((await answer(dir, { action_id: id, choice: "hour", reason: REASON })).outcome, "not_offered");
     assert.equal((await answer(dir, { action_id: id, choice: "tomorrow", reason: REASON })).outcome, "not_offered");
   } finally { await service.stop(); }
