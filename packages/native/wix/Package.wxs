@@ -156,15 +156,18 @@
     <util:CloseApplication Id="CloseAgent" Target="scopebond-agent.exe" TerminateProcess="1" Timeout="2" RebootPrompt="no" />
 
     <!-- On removal (not on an upgrade), before the files go: the agent's own uninstall, as the person removing it, with no
-         window; with PURGE=1, its purge option too (the Scopebond folder goes). A failure never stops the removal. -->
+         window; with PURGE=1, its purge option too (the Scopebond folder goes). A failure never stops the removal.
+         ROLLBACK=1 is the update helper taking back a version that did not start, to install the previous one: then
+         neither runs (the agent is closed with CloseApplication), so the workspace is not told of a removal and the
+         hook stays in the coding agents' settings. -->
     <SetProperty Id="ReportUninstall" Value="&quot;[INSTALLFOLDER]scopebond-agent.exe&quot; uninstall" Before="ReportUninstall" Sequence="execute"
                  Condition="PURGE &lt;&gt; &quot;1&quot;" />
     <SetProperty Action="SetReportUninstallPurge" Id="ReportUninstall" Value="&quot;[INSTALLFOLDER]scopebond-agent.exe&quot; uninstall --purge"
                  Before="ReportUninstall" Sequence="execute" Condition="PURGE = &quot;1&quot;" />
     <CustomAction Id="ReportUninstall" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Impersonate="yes" Return="ignore" />
     <InstallExecuteSequence>
-      <Custom Action="StopAgent" After="CostFinalize" Condition="(Installed OR WIX_UPGRADE_DETECTED) AND NOT UPGRADINGPRODUCTCODE" />
-      <Custom Action="ReportUninstall" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="StopAgent" After="CostFinalize" Condition="(Installed OR WIX_UPGRADE_DETECTED) AND NOT UPGRADINGPRODUCTCODE AND ROLLBACK &lt;&gt; &quot;1&quot;" />
+      <Custom Action="ReportUninstall" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND ROLLBACK &lt;&gt; &quot;1&quot;" />
 <?ifdef TrayPath?>
       <Custom Action="StartTray" After="InstallFinalize" Condition="NOT REMOVE AND ALLUSERS &lt;&gt; &quot;1&quot;" />
 <?endif?>

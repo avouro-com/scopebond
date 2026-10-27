@@ -11,14 +11,19 @@
 //   5. the outcome is written beside the installer, and the tray (or the agent, through autostart's launcher) starts again,
 //      installed or not;
 //   6. it waits for the new agent to answer with the new version; if it does not within the deadline, that version is
-//      recorded as failed (not tried again for a day, and status and the tray say so).
+//      recorded as failed (not tried again for a day, and status and the tray say so);
+//   7. and then it goes back to the version that ran before: the previous release's installer, fetched and checked like
+//      any update (signed manifest, size, SHA-256, Authenticode, held while it installs), after the new version is removed
+//      with ROLLBACK=1 (the installer then neither stops the agent through it nor runs the agent's uninstall, so the
+//      workspace is not told of a removal and the hook stays in the coding agents' settings). The workspace the installer
+//      remembered is passed back to the previous version's installer. The previous agent must answer, as in step 6.
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { win32 } from "node:path";
 import { callAgent } from "./ipc.js";
 import { startCommands } from "./autostart.js";
-import { INSTALLER_CHECK_SCRIPT, powershellEnv, windowsTool, type InstallResult } from "./native-update.js";
+import { fetchVerifiedInstaller, INSTALLER_CHECK_SCRIPT, msiLogPath, powershellEnv, windowsTool, type InstallResult, type Refused, type VerifiedInstaller } from "./native-update.js";
 import { recordFailedUpdate } from "./update.js";
 
 /** How long the new agent has to answer with its version after the install. */
@@ -47,7 +52,19 @@ export interface HelperDeps {
   msiexec(args: string[]): Promise<{ code: number | null; error: string | null }>;
   startAgain(input: HelperInput): void;
   agentAnswers(home: string, version: string, ms: number): Promise<boolean>;
+  /** The previous release's installer, downloaded and checked like an update (fetchVerifiedInstaller). */
+  fetchPrevious(version: string, home: string): Promise<VerifiedInstaller | Refused>;
+  /** The workspace the installer remembered for this user (`HKCU\Software\Avouro\Scopebond`, `Workspace`), or null. */
+  rememberedWorkspace(): string | null;
   now(): number;
+}
+
+/** A workspace address the helper passes to msiexec: https only, nothing msiexec could read as another property. */
+export function workspaceProperty(value: string | null): string | null {
+  if (!value || /[\s"]/.test(value)) return null;
+  let url: URL;
+  try { url = new URL(value); } catch { return null; }
+  return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash ? `WORKSPACE=${value}` : null;
 }
 
 /** taskkill by its full path in the system folder (the gateway's list of Windows tools does not name it). */
@@ -127,6 +144,13 @@ export const systemHelperDeps: HelperDeps = {
     }
     return false;
   },
+  fetchPrevious: (version, home) => fetchVerifiedInstaller(version, { dir: home }),
+  rememberedWorkspace() {
+    try {
+      const out = execFileSync(windowsTool("reg"), ["query", "HKCU\\Software\\Avouro\\Scopebond", "/v", "Workspace"], { encoding: "utf8", windowsHide: true, timeout: 10_000 });
+      return /Workspace\s+REG_SZ\s+(\S+)/.exec(out)?.[1] ?? null;
+    } catch { return null; }
+  },
   now: () => Date.now(),
 };
 
@@ -135,7 +159,7 @@ function writeResult(file: string, result: InstallResult): void {
 }
 
 /** Run the helper: check, install, start again, and confirm the new agent answers. Returns what it recorded. */
-export async function runUpdateHelper(input: HelperInput, deps: HelperDeps = systemHelperDeps, deadlineMs = UPDATE_START_DEADLINE_MS): Promise<InstallResult & { started: boolean | null }> {
+export async function runUpdateHelper(input: HelperInput, deps: HelperDeps = systemHelperDeps, deadlineMs = UPDATE_START_DEADLINE_MS): Promise<InstallResult & { started: boolean | null; rolled_back_to?: string | null }> {
   if (input.tray) await deps.closeTray(input.tray);
   await deps.waitForExit(input.pid, 60_000);
   const at = () => new Date(deps.now()).toISOString();
@@ -159,7 +183,41 @@ export async function runUpdateHelper(input: HelperInput, deps: HelperDeps = sys
   if (!result.installed) return { ...result, started: null };
   const started = await deps.agentAnswers(input.home, input.version, deadlineMs);
   if (!started) {
-    recordFailedUpdate(input.home, input.version, deps.now(), `the Scopebond Agent ${input.version} was installed but did not start and answer within ${Math.round(deadlineMs / 60_000)} minutes (log: ${input.log})`);
+    const why = `the Scopebond Agent ${input.version} was installed but did not start and answer within ${Math.round(deadlineMs / 60_000)} minutes (log: ${input.log})`;
+    recordFailedUpdate(input.home, input.version, deps.now(), why);
+    const back = await rollBack(input, deps, deadlineMs, why);
+    if (back) writeResult(input.result, { ...result, installed: false, reason: back.reason, rolled_back_to: back.to });
+    return { ...result, started, rolled_back_to: back?.to ?? null };
   }
   return { ...result, started };
+}
+
+/** Step 7: back to the version that ran before. Null when there is none to go back to (an unknown previous version, or
+ *  the same one); otherwise what happened, for the install result (`to` is null when going back did not work). */
+async function rollBack(input: HelperInput, deps: HelperDeps, deadlineMs: number, why: string): Promise<{ to: string | null; reason: string } | null> {
+  const previous = input.previous;
+  if (!/^\d+\.\d+\.\d+$/.test(previous) || previous === input.version) return null;
+  const failed = (step: string) => ({ to: null, reason: `${why}; going back to ${previous} did not work: ${step}` });
+  const fetched = await deps.fetchPrevious(previous, input.home);
+  if (!fetched.ok) return failed(fetched.reason);
+  // Read before the removal takes the remembered workspace away with the new version.
+  const workspace = workspaceProperty(deps.rememberedWorkspace());
+  if (input.tray) await deps.closeTray(input.tray);
+  const removeLog = msiLogPath(input.home, `${input.version}-rollback-remove`);
+  const removed = await deps.msiexec(["/x", input.msi, "/qn", "/norestart", "ROLLBACK=1", "/l*v", removeLog]);
+  if (removed.code !== 0 && removed.code !== 3010) {
+    deps.startAgain(input);
+    return failed(removed.error ? `msiexec could not start: ${removed.error}` : `removing ${input.version} ended with exit code ${removed.code} (log: ${removeLog})`);
+  }
+  const checked = await deps.check({ ...input, msi: fetched.path, version: previous, sha256: fetched.sha256, size: fetched.size });
+  if (!checked.ok) { deps.startAgain(input); return failed(checked.reason); }
+  const installLog = msiLogPath(input.home, `${previous}-rollback`);
+  let ran: { code: number | null; error: string | null };
+  try {
+    ran = await deps.msiexec(["/i", fetched.path, "/qn", "/norestart", ...(workspace ? [workspace] : []), "/l*v", installLog]);
+  } finally { checked.release(); }
+  deps.startAgain(input);
+  if (ran.code !== 0 && ran.code !== 3010) return failed(ran.error ? `msiexec could not start: ${ran.error}` : `installing ${previous} ended with exit code ${ran.code} (log: ${installLog})`);
+  if (!await deps.agentAnswers(input.home, previous, deadlineMs)) return failed(`${previous} was installed again but did not answer (log: ${installLog})`);
+  return { to: previous, reason: `${why}; Scopebond went back to ${previous}` };
 }

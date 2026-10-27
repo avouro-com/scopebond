@@ -29,5 +29,5 @@ test("it runs as the person removing Scopebond, logs what it says, and its exit 
   assert.match(action, /Return="ignore"/);
   const scheduled = element(/<Custom Action="ReportUninstall"[^>]*\/>/);
   assert.match(scheduled, /Before="RemoveFiles"/, "before the agent's files go");
-  assert.match(scheduled, /Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE"/, "a removal, not an upgrade");
+  assert.match(scheduled, /Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND ROLLBACK &lt;&gt; &quot;1&quot;"/, "a removal, not an upgrade, and not the update helper taking back a version that did not start");
 });
