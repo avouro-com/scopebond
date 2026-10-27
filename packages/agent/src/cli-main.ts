@@ -10,6 +10,8 @@
 //   scopebond-agent autostart on|off    start with this user's sign-in, or stop doing so (off also stops it now)
 //   scopebond-agent stop                stop the running agent (autostart still starts it at the next sign-in)
 //   scopebond-agent uninstall [--purge] autostart off, stop, the hook's uninstall (tells the workspace); what the installer runs
+//   scopebond-agent uninstall --signed-in   the same, at a person's sign-in after a removal for every user (allusers-cleanup.ts)
+//   scopebond-agent allusers-cleanup register|unregister <folder>   the installer's removal for every user (allusers-cleanup.ts)
 //   scopebond-agent version             this program's version and the hook it carries (an update checks the new one starts)
 
 import { existsSync } from "node:fs";
@@ -25,6 +27,7 @@ import { agentVersion } from "./update.js";
 import { writeOutputTo } from "./log-file.js";
 import { refreshAppsEntry, writeAppsEntry } from "./apps-entry.js";
 import { runUninstall } from "./uninstall.js";
+import { CLEANUP_COMMAND, runCleanupCommand, signedInCleanup, SIGNED_IN_FLAG } from "./allusers-cleanup.js";
 import { installKind, MAC_PACKAGE_EXE, UPDATE_HELPER_COMMAND } from "./native-update.js";
 import { MAC_UPDATER_COMMAND, MAC_UPDATER_EXE, runMacUpdater } from "./mac-update.js";
 import { upkeepCommand } from "./upkeep.js";
@@ -178,7 +181,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       // What the Windows installer runs when Scopebond is removed, the Settings entry's script runs, and anyone may run
       // (uninstall.ts): stop and unregister the agent, then the hook's own uninstall, which tells the workspace and takes the
       // hook out of the coding agents' settings. The Scopebond folder (keys, receipts) stays unless --purge.
+      // Active Setup at a person's sign-in, after a removal for every user: only for someone who used Scopebond, and not
+      // when it is installed again.
+      if (rest.includes(SIGNED_IN_FLAG) && signedInCleanup({ dir }) !== "run") return;
       process.exitCode = await runUninstall({ dir, purge: rest.includes("--purge"), kind: installKind(), me, caller: process.env[UNINSTALL_CALLER_ENV], stopRunning });
+      return;
+    }
+    case CLEANUP_COMMAND: {
+      process.exitCode = runCleanupCommand(rest);
       return;
     }
     case "autostart": {
