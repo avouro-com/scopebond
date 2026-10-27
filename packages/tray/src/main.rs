@@ -148,6 +148,17 @@ fn autostart_state() -> Autostart {
     os::autostart_state()
 }
 
+/// The menu offers to remove Scopebond where the macOS package's uninstall script is; Windows removes it from Settings.
+#[cfg(target_os = "macos")]
+fn can_uninstall() -> bool {
+    std::path::Path::new(os::UNINSTALL_SCRIPT).exists()
+}
+
+#[cfg(windows)]
+fn can_uninstall() -> bool {
+    false
+}
+
 #[cfg(windows)]
 fn autostart_state() -> Autostart {
     if os::read_string(true, os::RUN_KEY, "Scopebond").is_some() {
@@ -227,7 +238,7 @@ fn build_menu(app: &AppHandle, spec: &[Entry]) -> tauri::Result<Menu<tauri::Wry>
 
 fn create_tray(app: &AppHandle, shared: &Arc<Shared>) -> tauri::Result<tauri::tray::TrayIcon> {
     let (s_menu, s_tray) = (shared.clone(), shared.clone());
-    let starting = menu::menu_spec(None, &MenuContext { link: AgentLink::Starting, autostart: autostart_state(), notifications: Notifications::Blocks });
+    let starting = menu::menu_spec(None, &MenuContext { link: AgentLink::Starting, autostart: autostart_state(), notifications: Notifications::Blocks, uninstall: can_uninstall() });
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon_image(IconState::Working))
         .tooltip("Scopebond — starting")
@@ -641,6 +652,7 @@ fn draw(app: &AppHandle, shared: &Arc<Shared>) {
         link,
         autostart: autostart_state(),
         notifications: answer.as_ref().map(|a| a.settings.notifications).unwrap_or_default(),
+        uninstall: can_uninstall(),
     };
     let spec = menu::menu_spec(answer.as_ref(), &ctx);
     let state = match (link, &answer) {
@@ -834,6 +846,16 @@ fn dispatch(app: &AppHandle, shared: &Arc<Shared>, command: Command) {
             }
             // Asked for just now, so said whatever the notification setting: how to bring the icon back.
             show_toast(Toast { kind: Kind::Recovered, title: "Scopebond icon hidden".into(), text: menu::HIDDEN_ICON_TEXT.into(), unblock: None, button: None }, None);
+        }
+        Command::Uninstall => {
+            #[cfg(target_os = "macos")]
+            {
+                log::line("asked to uninstall");
+                if !os::uninstall() {
+                    shared.set_note(format!("Scopebond could not be removed from here. In Terminal: sudo \"{}\"", os::UNINSTALL_SCRIPT));
+                    shared.wake();
+                }
+            }
         }
     }
 }

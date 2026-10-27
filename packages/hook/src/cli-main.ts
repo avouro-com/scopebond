@@ -37,6 +37,7 @@ import { scaffold, harnessSnippet, placeHook, coverWithoutNpx, migrateToMonitorD
 import { onboardingSteps } from "./onboarding.js";
 import { dedupeHooks, describeEntry, duplicateHooks, type HookScope } from "./duplicates.js";
 import { executionPolicyAdvice, loginAgainCommand, nodeTooOldLines, retryCommand, unreachableHint } from "./windows-hints.js";
+import { macInstallChecks } from "./mac-checks.js";
 import { approvalSummary, retryAfterSeconds } from "./login-approval.js";
 import { createInterface } from "node:readline/promises";
 import {
@@ -2134,6 +2135,14 @@ async function runDoctor(args: string[] = []): Promise<void> {
   const cli = isSingleExecutable() ? process.execPath : cliPath();
   log(`  cli              ${cli} ${existsSync(cli) ? "ok" : "MISSING"}${isSingleExecutable() ? " (the signed installer's program)" : ""}`);
   check("cli", existsSync(cli), cli);
+  // macOS: the signed program's quarantine, and for the package's program its LaunchAgent and root updater.
+  if (process.platform === "darwin" && isSingleExecutable()) {
+    for (const mac of macInstallChecks(process.execPath)) {
+      log(`  ${mac.name.padEnd(16)} ${mac.ok ? `ok (${mac.detail})` : `BAD (${mac.detail})`}`);
+      check(mac.name, mac.ok, mac.detail);
+      if (!mac.ok && mac.fix) problem(mac.name, mac.fix);
+    }
+  }
   // The environment a hook call runs in: Node's code-loading variables block every hook call, the home folder is the
   // operating system account's, and a signed build reads its settings from the hook's command line only.
   const loaders = describeCodeLoading();

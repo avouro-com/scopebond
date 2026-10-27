@@ -1,7 +1,7 @@
 //! The right-click menu, worked out from the agent's tray model as plain data (no window system here, so it is tested on
 //! its own). It is short: *Open Scopebond*, *Blocked today (N)* when something was, the fix the person must act on when
 //! there is one, *Update now* when an update is waiting, then *Open <workspace> in Scopebond Cloud*, *Notifications* and
-//! *Start with Windows*, then *Get help…* and *Hide icon*. Chores Scopebond does by itself (sending records, checking the
+//! *Start with Windows*, then *Get help…*, *Uninstall Scopebond…* (macOS, the package's install) and *Hide icon*. Chores Scopebond does by itself (sending records, checking the
 //! rules) are never menu items. An action item calls only what the model offers at that moment, and there is no "Quit" and
 //! no "Pause protection": the hook decides every action whether or not the tray runs.
 
@@ -54,6 +54,9 @@ pub struct MenuContext {
     pub link: AgentLink,
     pub autostart: Autostart,
     pub notifications: Notifications,
+    /// The macOS package's uninstall script is in place: the menu offers to remove Scopebond. On Windows, Settings -> Apps
+    /// removes it.
+    pub uninstall: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +80,8 @@ pub enum Command {
     GetHelp,
     About,
     HideIcon,
+    /// Ask, then remove the macOS package (the system's own administrator prompt).
+    Uninstall,
 }
 
 const ACTION_PREFIX: &str = "action:";
@@ -190,6 +195,9 @@ pub fn menu_spec(answer: Option<&TrayAnswer>, ctx: &MenuContext) -> Vec<Entry> {
     });
     out.push(Entry::Separator);
     out.push(item("get_help", "Get help…"));
+    if ctx.uninstall {
+        out.push(item("uninstall", "Uninstall Scopebond…"));
+    }
     out.push(item("hide_icon", "Hide icon"));
     out
 }
@@ -215,6 +223,7 @@ pub fn command_for(id: &str, answer: Option<&TrayAnswer>) -> Option<Command> {
         "get_help" => Command::GetHelp,
         "about" => Command::About,
         "hide_icon" => Command::HideIcon,
+        "uninstall" => Command::Uninstall,
         _ => return None,
     })
 }
@@ -228,8 +237,20 @@ mod tests {
         TrayAnswer::parse(json.as_bytes()).unwrap()
     }
 
+    #[test]
+    fn uninstall_is_offered_only_where_the_package_can_remove_itself() {
+        let a = answer(fixtures::PROTECTED);
+        assert!(!ids(&menu_spec(Some(&a), &ctx(AgentLink::Answering))).contains(&"uninstall".to_string()));
+        let with = menu_spec(Some(&a), &MenuContext { uninstall: true, ..ctx(AgentLink::Answering) });
+        let l = labels(&with);
+        let help = l.iter().position(|x| x == "Get help…").unwrap();
+        assert_eq!(l[help + 1], "Uninstall Scopebond…");
+        assert_eq!(l.last().map(String::as_str), Some("Hide icon"));
+        assert_eq!(command_for("uninstall", Some(&a)), Some(Command::Uninstall));
+    }
+
     fn ctx(link: AgentLink) -> MenuContext {
-        MenuContext { link, autostart: Autostart::On, notifications: Notifications::Blocks }
+        MenuContext { link, autostart: Autostart::On, notifications: Notifications::Blocks, uninstall: false }
     }
 
     /// Every label, submenus indented, separators as "-".

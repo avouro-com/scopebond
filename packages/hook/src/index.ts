@@ -192,6 +192,7 @@ export { hookVersion, hookCommand, cliCommand } from "./version.js";
 export { decisionEntries, enabledPluginHookFiles, hookEntries, duplicateHooks, dedupeHooks, describeEntry } from "./duplicates.js";
 export type { HookEntry, HookScope } from "./duplicates.js";
 export { agentCommand, npmGlobalInstall, nodeTooOldLines, loginAgainCommand, executionPolicyAdvice, explainPowerShellError, unreachableHint, retryCommand } from "./windows-hints.js";
+export { macInstallChecks, MAC_PACKAGE, type MacCheck, type MacCheckDeps } from "./mac-checks.js";
 export { readAllowances, writeAllowances, makeAllowance, matchAllowance, matchQuietBlock, makeQuietBlock, QUIET_BLOCK_DAYS, mergeWorkspaceAllowances, readBlocked, recordBlocked, markBlocked, ALLOWANCES_FILE, BLOCKED_FILE, ALLOWANCE_DEFAULT_DAYS, readActionText, rememberActionText, ACTION_TEXT_FILE, endAllowance, matchPatternAllowance, patternCovers, patternKey } from "./allowances.js";
 export type { Allowance, BlockedItem, PatternQuery } from "./allowances.js";
 export { similarFor, patternSetting, packRecipesFor, rulePatternable } from "./pattern-recipes.js";
