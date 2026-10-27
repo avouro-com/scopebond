@@ -169,6 +169,8 @@ jobs:
           name: scopebond-tray-unsigned
           path: tray-build
       - name: Install, start, kill, come back, upgrade while running, remove
+        # The two tests allow 15 and 30 minutes; every child process in them is bounded too.
+        timeout-minutes: 45
         run: node --test --test-name-pattern "with the native tray" packages/native/test/msi.test.mjs
         env:
           SCOPEBOND_MSI: "1"

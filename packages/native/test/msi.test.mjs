@@ -17,8 +17,13 @@ const enabled = process.platform === "win32" && process.env.SCOPEBOND_MSI === "1
 // and never sends a real sign-in request or opens a browser on the runner. The upgrade passes none on purpose: it keeps
 // this recorded one.
 const TEST_WORKSPACE = "https://cloud.example.test";
+// spawnSync blocks the event loop, so node:test's own timeout can never end a test stuck in one: a hung child process
+// held the CI job until GitHub cancelled it. Every child process here is bounded; an install or removal gets minutes,
+// everything else a minute.
+const MSIEXEC_TIMEOUT_MS = 5 * 60_000;
+const TOOL = { encoding: "utf8", timeout: 60_000 };
 const reg = (key, name) => {
-  const r = spawnSync("reg", ["query", key, "/v", name], { encoding: "utf8" });
+  const r = spawnSync("reg", ["query", key, "/v", name], TOOL);
   return r.status === 0 ? (/REG_\w+\s+(.*)$/m.exec(r.stdout)?.[1] ?? "").trim() : null;
 };
 /** The Settings -> Apps entries named Scopebond Agent, with the values the list shows. A per-user MSI is listed from
@@ -31,10 +36,10 @@ const appsEntries = () => {
   ];
   const entries = [];
   for (const root of roots) {
-    const found = spawnSync("reg", ["query", root, "/s", "/f", "Scopebond Agent", "/d", "/e"], { encoding: "utf8" });
+    const found = spawnSync("reg", ["query", root, "/s", "/f", "Scopebond Agent", "/d", "/e"], TOOL);
     if (found.status !== 0) continue;
     for (const key of found.stdout.split(/\r?\n/).filter((line) => /^HKEY_/.test(line))) {
-      const values = spawnSync("reg", ["query", key.trim()], { encoding: "utf8" }).stdout ?? "";
+      const values = spawnSync("reg", ["query", key.trim()], TOOL).stdout ?? "";
       const entry = { key: key.trim() };
       for (const m of values.matchAll(/^\s+(DisplayName|DisplayVersion|Publisher|UninstallString|HelpLink|URLInfoAbout|URLUpdateInfo|Contact)\s+REG_\w+\s+(.*)$/gm)) entry[m[1]] = m[2].trim();
       entries.push(entry);
@@ -42,9 +47,12 @@ const appsEntries = () => {
   }
   return entries;
 };
+/** msiexec, bounded. A run that does not finish in time has status null, and its log says so first. */
 const msiexec = (args, log) => {
-  const r = spawnSync("msiexec", [...args, "/qn", "/l*v", log], { encoding: "utf8" });
-  return { status: r.status, log: existsSync(log) ? readFileSync(log, "utf16le") : "" };
+  const r = spawnSync("msiexec", [...args, "/qn", "/l*v", log], { encoding: "utf8", timeout: MSIEXEC_TIMEOUT_MS });
+  const text = existsSync(log) ? readFileSync(log, "utf16le") : "";
+  const timedOut = r.error?.code === "ETIMEDOUT";
+  return { status: timedOut ? null : r.status, log: timedOut ? `msiexec ${args.join(" ")} did not finish within ${MSIEXEC_TIMEOUT_MS / 60_000} minutes; its log ends:\n${text.slice(-3000)}` : text };
 };
 const USER_ENV = "HKCU\\Environment";
 const MACHINE_ENV = "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment";
@@ -65,8 +73,8 @@ test("the installer installs per user without an administrator, and removing it 
   assert.ok(existsSync(shortcut), "the Start-menu entry");
   assert.equal(reg("HKCU\\Software\\Avouro\\Scopebond", "InstallPath")?.replace(/\\$/, ""), join(process.env.LOCALAPPDATA, "Programs", "Scopebond"));
   assert.equal(reg("HKCU\\Software\\Avouro\\Scopebond", "Workspace"), TEST_WORKSPACE);
-  const run = spawnSync(installed, ["hook", "help"], { encoding: "utf8" });
-  assert.equal(run.status, 0, run.stderr);
+  const run = spawnSync(installed, ["hook", "help"], TOOL);
+  assert.equal(run.status, 0, run.error ? String(run.error) : run.stderr);
   // On this user's PATH, once, so `scopebond-agent status` works in a new terminal.
   const folder = join(process.env.LOCALAPPDATA, "Programs", "Scopebond");
   assert.equal(onPath(USER_ENV, folder), 1, `the folder on this user's PATH: ${reg(USER_ENV, "Path")}`);
@@ -136,8 +144,8 @@ test("with ALLUSERS=1 it installs for every user in Program Files, and removes c
 const trayExe = process.env.SCOPEBOND_TRAY_EXE;
 const RUN = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const running = (image) => {
-  const r = spawnSync("tasklist", ["/FI", `IMAGENAME eq ${image}`, "/FO", "CSV", "/NH"], { encoding: "utf8" });
-  return r.stdout.split(/\r?\n/).filter((line) => line.toLowerCase().startsWith(`"${image.toLowerCase()}"`)).map((line) => Number(line.split('","')[1]));
+  const r = spawnSync("tasklist", ["/FI", `IMAGENAME eq ${image}`, "/FO", "CSV", "/NH"], TOOL);
+  return (r.stdout ?? "").split(/\r?\n/).filter((line) => line.toLowerCase().startsWith(`"${image.toLowerCase()}"`)).map((line) => Number(line.split('","')[1]));
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** The pid of an agent that wrote its endpoint file and is running (not `not`), within `ms`. */
@@ -176,7 +184,7 @@ test("with the native tray: it starts at sign-in and keeps the agent running, an
   assert.match(endpoint.socket, /^\\\\\.\\pipe\\scopebond-agent-/);
 
   // Ended from outside (as Task Manager would): the tray starts it again within 30 seconds.
-  spawnSync("taskkill", ["/F", "/PID", String(pid)]);
+  spawnSync("taskkill", ["/F", "/PID", String(pid)], TOOL);
   const killedAt = Date.now();
   const again = await agentUp(home, 30_000, pid);
   assert.ok(again, "the agent is back within 30 s");
@@ -208,7 +216,7 @@ function previousVersion(version) {
 }
 /** The file version of the program a running process was started from (what Task Manager shows for it). */
 const processFileVersion = (pid) => spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
-  `(Get-Process -Id ${Number(pid)}).MainModule.FileVersionInfo.FileVersion`], { encoding: "utf8" }).stdout.trim();
+  `(Get-Process -Id ${Number(pid)}).MainModule.FileVersionInfo.FileVersion`], TOOL).stdout?.trim() ?? "";
 
 test("with the native tray: an upgrade replaces both running programs, keeps the workspace and needs no reboot", { skip: !(enabled && trayExe) && "Windows CI only, with the tray built (SCOPEBOND_MSI=1, SCOPEBOND_TRAY_EXE)", timeout: 30 * 60_000 }, async () => {
   const NEW = installerVersion();
@@ -244,7 +252,7 @@ test("with the native tray: an upgrade replaces both running programs, keeps the
     assert.ok(oldAgent, "the older tray started the older agent");
     const [oldTray] = running("scopebond-tray.exe");
     assert.ok(oldTray, "the older tray runs");
-    assert.ok(spawnSync(agentPath, ["--version"], { encoding: "utf8" }).stdout.startsWith(`agent/${OLD} `), "the older agent is installed");
+    assert.ok((spawnSync(agentPath, ["--version"], TOOL).stdout ?? "").startsWith(`agent/${OLD} `), "the older agent is installed");
 
     // The upgrade as a person or the agent's own update runs it: no WORKSPACE, with the tray and the agent running.
     const upgrade = msiexec(["/i", newMsi, "/norestart"], join(logs, "msi-upgrade-new.log"));
@@ -254,7 +262,7 @@ test("with the native tray: an upgrade replaces both running programs, keeps the
     // Both installed files are the new release's.
     assert.equal(readVersionInfo(agentPath).fileVersion, `${NEW}.0`, "the agent was replaced");
     assert.equal(readVersionInfo(trayPath).fileVersion, `${NEW}.0`, "the tray was replaced");
-    assert.ok(spawnSync(agentPath, ["--version"], { encoding: "utf8" }).stdout.startsWith(`agent/${NEW} `), "the new agent is installed");
+    assert.ok((spawnSync(agentPath, ["--version"], TOOL).stdout ?? "").startsWith(`agent/${NEW} `), "the new agent is installed");
     // The installer started the new tray, and the tray the new agent: new processes, from the new files.
     const newAgent = await agentUp(home, 90_000, oldAgent);
     assert.ok(newAgent, "the new agent runs");
