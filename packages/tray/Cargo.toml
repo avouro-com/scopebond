@@ -18,7 +18,7 @@ name = "scopebond-tray"
 path = "src/main.rs"
 
 [build-dependencies]
-tauri-build = { version = "=2.7.1", features = [] }
+tauri-build = { version = "=2.7.2", features = [] }
 
 [dependencies]
 # custom-protocol: the panel is served from the files built into the program, never from a development server.
