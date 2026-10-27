@@ -29,8 +29,12 @@ export {
   NPM_REGISTRY, PROVENANCE_REPOSITORY, PROVENANCE_REF, CLIENT_VERSION_MAX_BYTES, FAILED_UPDATE_FILE, FAILED_UPDATE_RETRY_MS,
 } from "./update.js";
 export type { ClientVersion, ProvenanceResult } from "./update.js";
-export { selfCheckProof, localChecks, runSelfCheck } from "./selfcheck.js";
+export { selfCheckProof, localChecks, runSelfCheck, hookIntegrity, type HookIntegrity } from "./selfcheck.js";
 export { integrationHealth, type IntegrationHealth } from "./integration-health.js";
+export {
+  hookPins, expectedHookCommand, expectedHookEntry, hookEntryDigest, integrationIntentState, repairHookPins, repairIntegrationIntent, noteTamper, tamperFindings,
+  type HookPin, type HookPins, type PinDeviation, type IntentState, type TamperFinding,
+} from "./hook-pin.js";
 export { parseQuestion, questionText, windowsScript, systemPrompter, serialized } from "./prompt.js";
 export type { OverrideQuestion, OverrideAnswer, Prompter } from "./prompt.js";
 export { queueReason, flushReasons, pendingReasons, REASONS_FILE } from "./override-reasons.js";
