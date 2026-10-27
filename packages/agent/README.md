@@ -61,8 +61,11 @@ Node.js nor npm: one signed program is both the agent and the hook, and the Scop
   and its Authenticode signature by Avouro LLC), checked again right before it runs, and installed with Windows' own
   `msiexec` by a copy of the signed program itself, with a verbose log in `.scopebond\updates\msi-<version>.log`. The
   new agent must start and report its version within three minutes; a version that does not install or start is
-  recorded, shown in `status` and the tray, and not tried again for a day. An install for every user (Program Files) is
-  updated by whoever deployed it.
+  recorded, shown in `status` and the tray, and not tried again for a day. A version that installed but did not start
+  is taken back: the previous release's installer is fetched and checked the same three ways, the new version is
+  removed without telling the workspace or touching the hook entries, and the previous one is installed again with the
+  workspace it had (logs `msi-<version>-rollback-remove.log` and `msi-<previous>-rollback.log`). An install for every
+  user (Program Files) is updated by whoever deployed it.
 - **From an npm install.** Existing npm installs keep working until the signed installer is installed. When the signed
   agent first starts (or `setup` runs) it takes over: it stops the npm agent, removes its `ScopebondAgent` sign-in entry,
   its launcher, its Settings -> Apps entry and that entry's uninstall script, and points every Scopebond hook entry at

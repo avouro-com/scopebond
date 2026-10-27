@@ -113,6 +113,21 @@ test("the installer installs per user without an administrator, and removing it 
   assert.equal(appsEntries().filter((e) => e.DisplayName === "Scopebond Agent").length, 0, "no longer listed in Settings -> Apps");
 });
 
+test("ROLLBACK=1 (the update helper taking back a version that did not start) removes it without the agent's uninstall", { skip: !enabled && "Windows CI only (SCOPEBOND_MSI=1)", timeout: 15 * 60_000 }, async () => {
+  const msi = buildMsi();
+  const logs = process.env.RUNNER_TEMP ?? process.env.TEMP;
+  const installed = join(process.env.LOCALAPPDATA, "Programs", "Scopebond", "scopebond-agent.exe");
+  const install = msiexec(["/i", msi, `WORKSPACE=${TEST_WORKSPACE}`], join(logs, "msi-rollback-install.log"));
+  assert.equal(install.status, 0, install.log.slice(-3000));
+  const remove = msiexec(["/x", msi, "ROLLBACK=1"], join(logs, "msi-rollback-remove.log"));
+  assert.equal(remove.status, 0, remove.log.slice(-3000));
+  assert.match(remove.log, /Skipping action: ReportUninstall \(condition is false\)/, "the workspace is not told of a removal; the hook stays in the settings");
+  assert.match(remove.log, /Skipping action: StopAgent \(condition is false\)/, "the agent that did not start is closed, not asked");
+  assert.ok(!existsSync(installed), "the version is gone, for the previous one to be installed");
+  // The remembered workspace goes with it: the helper reads it first and passes it to the previous version's installer.
+  assert.equal(reg("HKCU\\Software\\Avouro\\Scopebond", "Workspace"), null);
+});
+
 test("with ALLUSERS=1 it installs for every user in Program Files, and removes cleanly", { skip: !enabled && "Windows CI only (SCOPEBOND_MSI=1)", timeout: 15 * 60_000 }, async () => {
   const msi = buildMsi();
   const logs = process.env.RUNNER_TEMP ?? process.env.TEMP;

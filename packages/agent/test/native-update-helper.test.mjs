@@ -13,6 +13,7 @@ import {
   failedUpdate, installHelper, installerName, INSTALLER_CHECK_SCRIPT, INSTALL_RESULT, msiLogPath, noteUpdateOutcome, PUBLISHER, readUpdatePending, recordFailedUpdate,
   runUpdateHelper, takeInstallResult, UPDATE_HELPER_COMMAND, UPDATE_PENDING_MS, updateTarget, writeUpdatePending, helperInput,
 } from "../dist/index.js";
+import { workspaceProperty } from "../dist/update-helper.js";
 import { trayModel } from "../dist/tray-model.js";
 import { healthOf } from "../dist/health.js";
 
@@ -31,17 +32,20 @@ function inputFor(dir, over = {}) {
 }
 
 /** Stand-ins that record the order the helper does things in. */
-function fakeDeps({ check = { ok: true }, code = 0, answers = true } = {}) {
+function fakeDeps({ check = { ok: true }, code = 0, answers = true, previous = { ok: false, reason: "no previous release here" }, workspace = null, codes = null } = {}) {
   const calls = [];
+  const exits = codes ? [...codes] : null;
   return {
     calls,
     deps: {
       closeTray: async (tray) => { calls.push(`closeTray ${tray}`); },
       waitForExit: async (pid) => { calls.push(`waitForExit ${pid}`); },
       check: async () => { calls.push("check"); return check.ok ? { ok: true, release: () => calls.push("release") } : { ok: false, reason: check.reason }; },
-      msiexec: async (args) => { calls.push(`msiexec ${args.join(" ")}`); return { code, error: null }; },
+      msiexec: async (args) => { calls.push(`msiexec ${args.join(" ")}`); return { code: exits ? exits.shift() : code, error: null }; },
       startAgain: () => { calls.push("startAgain"); },
-      agentAnswers: async (_home, version) => { calls.push(`agentAnswers ${version}`); return answers; },
+      agentAnswers: async (_home, version) => { calls.push(`agentAnswers ${version}`); return typeof answers === "function" ? answers(version) : answers; },
+      fetchPrevious: async (version) => { calls.push(`fetchPrevious ${version}`); return previous; },
+      rememberedWorkspace: () => workspace,
       now: () => Date.parse("2026-10-11T12:00:00Z"),
     },
   };
@@ -112,6 +116,60 @@ test("installed but the new agent never answers: the version is recorded as fail
   const failed = failedUpdate(dir, Date.parse("2026-10-11T12:01:00Z"));
   assert.equal(failed?.version, VERSION);
   assert.match(failed.reason, /did not start and answer/);
+});
+
+test("installed but the new agent never answers: it goes back to the previous signed version, the workspace kept", async () => {
+  const dir = home();
+  const input = inputFor(dir);
+  const prevMsi = join(dir, "updates", installerName("9.9.8"));
+  const { calls, deps } = fakeDeps({
+    answers: (v) => v === "9.9.8",
+    previous: { ok: true, path: prevMsi, version: "9.9.8", sha256: "cd".repeat(32), size: 20 },
+    workspace: "https://cloud.scopebond.com",
+  });
+  const outcome = await runUpdateHelper(input, deps, 1_000);
+  assert.equal(outcome.started, false);
+  assert.equal(outcome.rolled_back_to, "9.9.8");
+  assert.deepEqual(calls.slice(calls.indexOf(`agentAnswers ${VERSION}`)), [
+    `agentAnswers ${VERSION}`, "fetchPrevious 9.9.8", "closeTray D:\\Scopebond\\scopebond-tray.exe",
+    `msiexec /x ${input.msi} /qn /norestart ROLLBACK=1 /l*v ${msiLogPath(dir, `${VERSION}-rollback-remove`)}`,
+    "check", `msiexec /i ${prevMsi} /qn /norestart WORKSPACE=https://cloud.scopebond.com /l*v ${msiLogPath(dir, "9.9.8-rollback")}`,
+    "release", "startAgain", "agentAnswers 9.9.8",
+  ], "the previous installer is fetched and checked before the new version is removed; the removal skips the agent's uninstall");
+  const lines = [];
+  noteUpdateOutcome(dir, (l) => lines.push(l), "9.9.8");
+  assert.match(lines.join("\n"), /did not start, so Scopebond went back to 9\.9\.8/);
+  assert.equal(failedUpdate(dir)?.version, VERSION, "the version that did not start is not tried again at once");
+});
+
+test("going back needs the previous release: without it nothing is removed and the failure says why", async () => {
+  const dir = home();
+  const { calls, deps } = fakeDeps({ answers: false });
+  const outcome = await runUpdateHelper(inputFor(dir), deps, 1_000);
+  assert.equal(outcome.rolled_back_to, null);
+  assert.ok(!calls.some((c) => c.startsWith("msiexec /x")), "the installed version stays when there is nothing to go back to");
+  assert.match(takeInstallResult(dir).reason, /going back to 9\.9\.8 did not work: no previous release here/);
+});
+
+test("a removal that fails leaves the new version and starts Scopebond again; no previous version means no rollback", async () => {
+  const dir = home();
+  const prevMsi = join(dir, "updates", installerName("9.9.8"));
+  const { calls, deps } = fakeDeps({ answers: false, codes: [0, 1603], previous: { ok: true, path: prevMsi, version: "9.9.8", sha256: "cd".repeat(32), size: 20 } });
+  await runUpdateHelper(inputFor(dir), deps, 1_000);
+  assert.ok(!calls.some((c) => c.startsWith(`msiexec /i ${prevMsi}`)));
+  assert.equal(calls.at(-1), "startAgain");
+  assert.match(takeInstallResult(dir).reason, /removing 9\.9\.9 ended with exit code 1603/);
+
+  const none = home();
+  const { calls: noCalls, deps: noDeps } = fakeDeps({ answers: false });
+  await runUpdateHelper(inputFor(none, { previous: "" }), noDeps, 1_000);
+  assert.ok(!noCalls.some((c) => c.startsWith("fetchPrevious")), "an unknown previous version: nothing to go back to");
+});
+
+test("only an https workspace address reaches msiexec, never another property", () => {
+  assert.equal(workspaceProperty("https://cloud.scopebond.com"), "WORKSPACE=https://cloud.scopebond.com");
+  assert.equal(workspaceProperty("https://eu.scopebond.com:8443/w/x"), "WORKSPACE=https://eu.scopebond.com:8443/w/x");
+  for (const bad of [null, "", "http://cloud.scopebond.com", "https://x.com PURGE=1", "https://x.com\" PURGE=\"1", "file:///C:/x"]) assert.equal(workspaceProperty(bad), null, String(bad));
 });
 
 test("what an agent hears at start: installed and running, installed but another version runs, or a helper that never finished", () => {

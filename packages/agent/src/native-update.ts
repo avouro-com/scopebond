@@ -181,7 +181,11 @@ export function msiLogPath(dir: string, version: string): string {
 /** What the helper that installs after this agent exits records, beside the installer. */
 export const INSTALL_RESULT = "install-result.json";
 
-export interface InstallResult { at: string; version: string; installed: boolean; reason: string | null; exit_code: number | null; log?: string | null }
+export interface InstallResult {
+  at: string; version: string; installed: boolean; reason: string | null; exit_code: number | null; log?: string | null;
+  /** Set when the new version was installed but did not start, and the helper went back to this version. */
+  rolled_back_to?: string | null;
+}
 
 /** The check right before installing, in Windows PowerShell (5.1) for Windows' own Authenticode verdict. It is constant
  *  text: the installer, its digest and size and the publisher rule reach it as environment variables (SB_MSI, SB_SHA256,
@@ -317,6 +321,7 @@ export function takeInstallResult(dir: string): InstallResult | null {
     return {
       at: String(r.at ?? ""), version: String(r.version ?? ""), installed: r.installed === true, reason: typeof r.reason === "string" ? r.reason : null,
       exit_code: typeof r.exit_code === "number" ? r.exit_code : null, log: typeof r.log === "string" ? r.log : null,
+      ...(typeof r.rolled_back_to === "string" && /^\d+\.\d+\.\d+$/.test(r.rolled_back_to) ? { rolled_back_to: r.rolled_back_to } : {}),
     };
   } catch { return null; }
 }

@@ -386,7 +386,8 @@ export function noteUpdateOutcome(dir: string, log: (line: string) => void, runn
     clearUpdatePending(dir);
     if (!installed.installed) {
       recordFailedUpdate(dir, installed.version, now, installed.reason ?? "it was not installed");
-      log(`the update to ${installed.version} was not installed: ${installed.reason ?? "unknown"}`);
+      if (installed.rolled_back_to) log(`the update to ${installed.version} did not start, so Scopebond went back to ${installed.rolled_back_to}: ${installed.reason ?? "unknown"}`);
+      else log(`the update to ${installed.version} was not installed: ${installed.reason ?? "unknown"}`);
     } else if (installed.version !== running) {
       const why = `the installer reported ${installed.version} installed, but the agent that started is ${running}${installed.log ? ` (log: ${installed.log})` : ""}`;
       recordFailedUpdate(dir, installed.version, now, why);
