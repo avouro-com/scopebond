@@ -175,8 +175,8 @@ components send their records and health signals to the workspace.
 | [`@scopebond/hook`](packages/hook) | Checks for Claude Code, Cursor, OpenAI Codex and GitHub Copilot, signed local records, and an optional workspace connection. |
 | [`@scopebond/agent`](packages/agent) | The Scopebond service on the computer, which keeps the computer connected to its workspace: delivers records, keeps the connection and the hook working, and asks a person about a blocked action. |
 | [`@scopebond/github-action`](packages/github-action) | Required agent pull-request checks in your own runner. |
-| [`@scopebond/mcp`](packages/mcp) | A policy-checking proxy for MCP tool calls. |
-| [`@scopebond/framework`](packages/framework) | Policy guards for tools inside agent applications. |
+| [`@scopebond/mcp`](packages/mcp) | A policy-checking proxy for MCP tool calls. Frozen: security fixes only. |
+| [`@scopebond/framework`](packages/framework) | Policy guards for tools inside agent applications. Frozen: security fixes only. |
 | [`@scopebond/gateway`](packages/gateway) | Checks agent actions sent over HTTP and MCP, with constrained execution, signed records, and a way to stop one agent or all of them. Default execution is a simulation. |
 | [`@scopebond/verify`](packages/verify) | Deterministic policy evaluation, signature verification, and conformance vectors. |
 | [`@scopebond/policy-schema`](packages/policy-schema) | Policy, action, receipt, and observation schemas and shared vectors. |

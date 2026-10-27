@@ -4,6 +4,11 @@
 Scopebond Cloud, the hosted shared workspace, is a separate proprietary service
 and is not included in this package.
 
+**Status:** frozen. The proxy is maintained for security fixes only: no new features,
+and its command line and policy format do not change. New protection lands in the
+hook ([`@scopebond/hook`](../hook)), which checks a coding agent's MCP tool calls
+without a proxy in between.
+
 The Scopebond **MCP proxy** — one policy for every Model Context Protocol tool
 call, in front of the servers an agent uses. It sits in-path between an MCP client
 and an upstream server, checks each `tools/call` against your policy before it is
