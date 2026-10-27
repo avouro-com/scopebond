@@ -10,10 +10,25 @@
 // after `WAIT_RESERVE_MS` (`waitWithinDeadline`). The local log's lock wait on a hook call is capped at
 // `HOT_PATH_STORE_BUSY_MS` (5 s after the person answered), the delivery queue's at 2 s.
 //
-// Residual risk: a wait inside a synchronous call (a SQLite lock wait) cannot be interrupted by a timer. Each is bounded
-// by its own cap, and the deny follows the moment it returns; but several such waits in one call (opening the log, then
-// writing it) can still add up past the agent's own limit on a computer where another process holds the log's lock for
-// that long. The agent then treats the call as timed out.
+// A timer alone cannot keep that promise: it runs on the thread that decides, so a decision stuck in synchronous work (a
+// regular expression that backtracks, a loop that does not end) would hold it off for good and the agent would run the action
+// unchecked. So the deadline also arms a watchdog: a worker thread with its own event loop and nothing but a timer, started
+// unreferenced when the deadline is armed. When it fires (`WATCHDOG_GRACE_MS` after the deadline, so a free main thread
+// answers first), it connects to the main thread's own inspector (in process, no port) and asks it to evaluate the deadline's
+// deny. The inspector delivers that through a V8 interrupt, which runs between two steps of whatever JavaScript is executing,
+// a regular expression's backtracking included; the deny is written in the agent's own format and the process exits with the
+// agent's own deny code, exactly as when the timer fires. (A worker cannot end the process with an exit code of its own
+// choosing, and a signal reads to every agent as a crash, so the deny has to run on the main thread.) Node then prints
+// "Waiting for the debugger to disconnect..." on stderr after the deny's reason; the decision is unaffected.
+//
+// Cost: starting the worker is about 2 ms on the main thread, and it boots on its own thread while the hook loads; it never
+// loads a module of the hook and is stopped when the deadline is disarmed or the process exits. A worker that cannot start
+// (no worker threads, no inspector) leaves the timer, as before.
+//
+// Residual risk: an interrupt runs only when JavaScript runs, so a wait inside one native call (a SQLite lock wait) is not cut
+// short. Each is bounded by its own cap, and the deny follows the moment it returns; but several such waits in one call
+// (opening the log, then writing it) can still add up past the agent's own limit on a computer where another process holds
+// the log's lock for that long. The agent then treats the call as timed out.
 //
 // `SCOPEBOND_HOOK_DEADLINE_MS` can only shorten the deadline (tests use it to prove the deny); it can never lengthen it.
 
@@ -29,6 +44,39 @@ export const HOT_PATH_STORE_BUSY_MS = 8_000;
 export const WAIT_RESERVE_MS = 10_000;
 
 let deadlineAt: number | null = null;
+
+/** How long after the deadline the watchdog asks: a main thread that is free answers on its own timer first. */
+const WATCHDOG_GRACE_MS = 200;
+/** Where the armed deadline's deny waits for the watchdog's interrupt. */
+const WATCHDOG_KEY = "__scopebondHookDeadline";
+// The watchdog thread, as source: CommonJS, built-ins only, nothing of the hook loaded. It asks once and leaves the rest to
+// the main thread (which exits with the deny).
+const WATCHDOG_SOURCE = [
+  "const { workerData } = require('node:worker_threads');",
+  "setTimeout(() => {",
+  "  try {",
+  "    const { Session } = require('node:inspector');",
+  "    const session = new Session();",
+  "    session.connectToMainThread();",
+  "    session.post('Runtime.evaluate', { expression: workerData.expression });",
+  "  } catch {}",
+  "}, workerData.ms);",
+].join("\n");
+
+/** Start the watchdog thread; returns how to stop it, or null when no worker can start (the timer still stands). */
+function startWatchdog(ms: number): (() => void) | null {
+  try {
+    const threads = process.getBuiltinModule?.("node:worker_threads") as typeof import("node:worker_threads") | undefined;
+    if (!threads) return null;
+    const worker = new threads.Worker(WATCHDOG_SOURCE, {
+      eval: true, env: threads.SHARE_ENV, stdout: false, stderr: false,
+      workerData: { ms: ms + WATCHDOG_GRACE_MS, expression: `globalThis[${JSON.stringify(WATCHDOG_KEY)}]?.()` },
+    });
+    worker.unref();
+    worker.on("error", () => { /* a watchdog that cannot run leaves the timer */ });
+    return () => { worker.terminate().catch(() => {}); };
+  } catch { return null; }
+}
 
 /** The deadline for a hook command, or null when the command is not a hook call. */
 export function hookDeadlineMs(command: string | undefined, env: NodeJS.ProcessEnv = process.env): number | null {
@@ -101,10 +149,23 @@ export function armHookDeadline(command: string | undefined = process.argv[2], e
   const ms = hookDeadlineMs(command, env);
   if (ms === null) return () => {};
   deadlineAt = Date.now() + ms;
-  const timer = setTimeout(() => {
+  const armedAt = deadlineAt;
+  let fired = false;
+  const deny = (): void => {
+    // Once, and only for the deadline still armed: the watchdog's interrupt can arrive after a disarm it raced.
+    if (fired || deadlineAt !== armedAt) return;
+    fired = true;
     const reason = `Scopebond hook failed closed: no decision within ${ms < 1000 ? `${ms} ms` : `${Math.round(ms / 1000)} s`}, so this action is blocked rather than run unchecked. Run it again; if it keeps happening, run the Scopebond doctor command.`;
     recordHookError("deadline", reason);
     denyHookCall(command, reason);
-  }, ms);
-  return () => { clearTimeout(timer); deadlineAt = null; };
+  };
+  const timer = setTimeout(deny, ms);
+  (globalThis as Record<string, unknown>)[WATCHDOG_KEY] = deny;
+  const stopWatchdog = startWatchdog(ms);
+  return () => {
+    clearTimeout(timer);
+    if ((globalThis as Record<string, unknown>)[WATCHDOG_KEY] === deny) delete (globalThis as Record<string, unknown>)[WATCHDOG_KEY];
+    stopWatchdog?.();
+    deadlineAt = null;
+  };
 }

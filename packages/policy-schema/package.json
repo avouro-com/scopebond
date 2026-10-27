@@ -64,6 +64,10 @@
       "types": "./dist/allow-patterns.d.ts",
       "default": "./dist/allow-patterns.js"
     },
+    "./pattern": {
+      "types": "./dist/pattern.d.ts",
+      "default": "./dist/pattern.js"
+    },
     "./vectors/pack-format.json": "./vectors/pack-format.json",
     "./vectors/example-pack.json": "./vectors/example-pack.json",
     "./vectors/example-pack-key.json": "./vectors/example-pack-key.json",

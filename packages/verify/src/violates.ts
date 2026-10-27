@@ -34,6 +34,7 @@
 
 import { createHash } from "node:crypto";
 import { canonical } from "@scopebond/policy-schema/canonical";
+import { POLICY_PATTERN_INPUT_MAX, POLICY_PATTERN_MAX, patternProblem } from "@scopebond/policy-schema/pattern";
 export { canonical } from "@scopebond/policy-schema/canonical";
 import { jsonText } from "./text.js";
 import { validateAction, validatePolicyShape } from "./validate.js";
@@ -121,13 +122,14 @@ export function validatePolicy(value: unknown): ValidationResult {
         errors.push(`/clauses/${clause.id}/min_approvals only one approval is supported before DEV10`);
       }
       if (clause.type === "action_allowlist" && (clause as Record<string, unknown>).exceptions) {
-        // An exception's patterns are compiled by violates() too: an invalid one is an invalid policy, never a throw.
+        // An exception's patterns are compiled by violates() too: an invalid or unbounded one is an invalid policy, never a
+        // throw or a stall.
         for (const exception of (clause as Record<string, unknown>).exceptions as Array<Record<string, ParamBound>>) {
           for (const [field, bound] of Object.entries(exception)) {
             for (const pattern of [bound.pattern, bound.items?.pattern]) {
               if (typeof pattern !== "string") continue;
-              // eslint-disable-next-line security/detect-non-literal-regexp -- compiles the policy author's own exception pattern only to check that it is a valid regular expression
-              try { new RegExp(pattern); } catch { errors.push(`/clauses/${clause.id}/exceptions/${field} has an invalid pattern`); }
+              const problem = patternProblem(pattern, POLICY_PATTERN_MAX);
+              if (problem) errors.push(`/clauses/${clause.id}/exceptions/${field} has an invalid pattern (${problem})`);
             }
           }
         }
@@ -139,11 +141,13 @@ export function validatePolicy(value: unknown): ValidationResult {
           }
           // An array bound's `items` pattern is compiled by violates() just like a
           // top-level one, so it is checked here too: an invalid one made violates()
-          // throw instead of returning an "invalid policy" verdict.
+          // throw instead of returning an "invalid policy" verdict. A pattern that parses but
+          // can backtrack catastrophically (pattern.ts) is refused the same way: it is tested
+          // on values the agent chooses.
           for (const pattern of [bound.pattern, bound.items?.pattern]) {
             if (typeof pattern !== "string") continue;
-            // eslint-disable-next-line security/detect-non-literal-regexp -- compiles the policy author's own param_bounds pattern only to check that it is a valid regular expression
-            try { new RegExp(pattern); } catch { errors.push(`/clauses/${clause.id}/param_bounds/${field} has an invalid pattern`); }
+            const problem = patternProblem(pattern, POLICY_PATTERN_MAX);
+            if (problem) errors.push(`/clauses/${clause.id}/param_bounds/${field} has an invalid pattern (${problem})`);
           }
         }
       }
@@ -223,6 +227,23 @@ const listHas = (list: readonly unknown[], value: unknown): boolean => list.incl
 // literal threw on an object with its own "toString" key, which made violates() throw.
 const shown = jsonText;
 
+const compiledPatterns = new Map<string, RegExp>();
+/** Whether a param value meets a policy pattern. The pattern passed validatePolicy() (it parses and cannot backtrack
+ *  catastrophically: pattern.ts); the value is the agent's, so one longer than `POLICY_PATTERN_INPUT_MAX` fails without
+ *  being tested. Failing is the closed side for every pattern a policy carries: a bound that is not met is a violation, an
+ *  exception that is not met excuses nothing. (Clipping the value instead could let an over-long value pass a pattern its
+ *  excess would fail.) */
+function matchesPattern(pattern: string, value: unknown): boolean {
+  if (typeof value !== "string" || value.length > POLICY_PATTERN_INPUT_MAX) return false;
+  let re = compiledPatterns.get(pattern);
+  if (!re) {
+    // eslint-disable-next-line security/detect-non-literal-regexp -- the policy author's own pattern, checked by validatePolicy() (patternProblem); never built from action text
+    re = new RegExp(pattern);
+    if (compiledPatterns.size < 1000) compiledPatterns.set(pattern, re);
+  }
+  return re.test(value);
+}
+
 // Whether a single value satisfies a scalar bound (enum / min / max / pattern).
 // Used for array-element bounds (`items`); the top-level scalar checks below keep
 // their own precise messages.
@@ -233,8 +254,7 @@ function elementSatisfiesBound(el: unknown, b: ScalarBound): boolean {
     if (b.min != null && el < b.min) return false;
     if (b.max != null && el > b.max) return false;
   }
-  // eslint-disable-next-line security/detect-non-literal-regexp -- the policy author's own param_bounds pattern, already compiled once by validatePolicy(); never built from action text
-  if (b.pattern && (typeof el !== "string" || !new RegExp(b.pattern).test(el))) return false;
+  if (b.pattern && !matchesPattern(b.pattern, el)) return false;
   return true;
 }
 
@@ -263,17 +283,54 @@ export function durationToMs(d: string): number {
   return ((dd * 24 + hh) * 60 + mm) * 60 * 1000 + ss * 1000;
 }
 
-// Glob match for endpoint paths: `*` within a segment, `**` across segments.
-function globMatch(glob: string, s: string): boolean {
-  let re = "";
+// Glob match for endpoint paths and git refs: `*` within a segment (anything but `/`), `**` across segments (anything but a
+// line break, as the regular expression it replaces read `.`), every other character itself, the whole value.
+//
+// Read as a set of positions in the glob that the value so far can have reached (a Thompson simulation), one character at a
+// time: the cost is the value's length times the glob's, with no backtracking, however many stars the glob has. A regular
+// expression built from `a/**/**/**/b` backtracked polynomially on a long path that does not match.
+const STAR = -1;
+const ANY_STAR = -2;
+const isLineBreak = (code: number): boolean => code === 0x0a || code === 0x0d || code === 0x2028 || code === 0x2029;
+
+/** A glob as tokens: a character code, `STAR` (`*`) or `ANY_STAR` (`**`). */
+function globTokens(glob: string): number[] {
+  const tokens: number[] = [];
   for (let i = 0; i < glob.length; i++) {
-    const ch = glob[i];
-    if (ch === "*") { if (glob[i + 1] === "*") { re += ".*"; i++; } else re += "[^/]*"; }
-    else if (".+?^${}()|[]\\".includes(ch)) re += "\\" + ch;
-    else re += ch;
+    if (glob[i] !== "*") tokens.push(glob.charCodeAt(i));
+    else if (glob[i + 1] === "*") { tokens.push(ANY_STAR); i++; }
+    else tokens.push(STAR);
   }
-  // eslint-disable-next-line security/detect-non-literal-regexp -- built from a policy author's glob with every regex metacharacter escaped above; the only operators added are `[^/]*` and `.*`
-  return new RegExp("^" + re + "$").test(s);
+  return tokens;
+}
+
+function globMatch(glob: string, s: string): boolean {
+  const tokens = globTokens(glob);
+  const n = tokens.length;
+  let current = new Uint8Array(n + 1);
+  let next = new Uint8Array(n + 1);
+  // A star may match nothing: a position before one also reaches the position after it.
+  const close = (set: Uint8Array): void => { for (let i = 0; i < n; i++) if (set[i] && tokens[i] < 0) set[i + 1] = 1; };
+  current[0] = 1;
+  close(current);
+  for (let k = 0; k < s.length; k++) {
+    const code = s.charCodeAt(k);
+    const slash = code === 0x2f;
+    const lineBreak = isLineBreak(code);
+    next.fill(0);
+    let reached = false;
+    for (let i = 0; i < n; i++) {
+      if (!current[i]) continue;
+      const t = tokens[i];
+      if (t === STAR) { if (!slash) { next[i] = 1; reached = true; } }
+      else if (t === ANY_STAR) { if (!lineBreak) { next[i] = 1; reached = true; } }
+      else if (t === code) { next[i + 1] = 1; reached = true; }
+    }
+    if (!reached) return false;
+    close(next);
+    [current, next] = [next, current];
+  }
+  return current[n] === 1;
 }
 
 /** An HTTP host as text: lowercase, without one trailing dot. Null when it is not a bare host name or address
@@ -699,8 +756,7 @@ export function violates(
             if (b.min != null && val < b.min) { record(clause, `param ${field}=${val} below min ${b.min}`, `${field}:min`); continue clauses; }
             if (b.max != null && val > b.max) { record(clause, `param ${field}=${val} above max ${b.max}`, `${field}:max`); continue clauses; }
           }
-          // eslint-disable-next-line security/detect-non-literal-regexp -- the policy author's own param_bounds pattern, already compiled once by validatePolicy(); never built from action text
-          if (b.pattern && (typeof val !== "string" || !new RegExp(b.pattern).test(val))) {
+          if (b.pattern && !matchesPattern(b.pattern, val)) {
             record(clause, `param ${field} fails pattern`, `${field}:pattern`); continue clauses;
           }
         }

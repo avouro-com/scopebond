@@ -42,7 +42,9 @@ SDK signatures; cross-package vectors pin the resulting bytes.
 - **All applicable clauses are considered** — an enforcing violation outranks
   approval and monitor violations regardless of clause order.
 - **Action allowlists are closed** — when present, an unlisted action violates
-  the allowlist; bounded numeric and patterned values must have the required type.
+  the allowlist; bounded numeric and patterned values must have the required type. A pattern must pass the shared
+  pattern check (`@scopebond/policy-schema/pattern`), or the policy is invalid; a value longer than 4,096 characters
+  fails a pattern without being tested.
 - **Exceptions are bounded** — an `action_allowlist` clause's `exceptions` excuse an
   action from its `param_bounds` only when it meets every bound of one exception; a
   field the action does not carry never meets one.
