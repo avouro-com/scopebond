@@ -51,7 +51,11 @@ export const isVersion = (v: unknown): v is string => typeof v === "string" && V
  *  one) offers the signed install no update.
  *
  *  `hook_bundle` names a newer engine for the signed install (engine-update.ts) and `intel` the plugin component
- *  (intel-install.ts); each is left out when absent or not usable, which never refuses the rest of the answer. */
+ *  (intel-install.ts); each is left out when absent or not usable, which never refuses the rest of the answer.
+ *
+ *  The request names this computer's platform (`?platform=darwin-arm64`, Node's `${process.platform}-${process.arch}`), so
+ *  a workspace that keeps a signed build per platform names the one for this computer and says so in `native_platform`.
+ *  An answer whose `native_platform` names another platform offers the signed install no update. */
 export interface ClientVersion {
   policy: "recommended" | "hold"; hook: string | null; agent: string | null; native_agent: string | null;
   hook_bundle?: HookBundleTarget | null; intel?: IntelTarget | null;
@@ -88,9 +92,12 @@ function inRange(named: string, running: string): boolean {
 export async function fetchClientVersion(
   connection: Pick<HookConnection, "url" | "credential">, fetchImpl: typeof fetch = fetch, timeoutMs = 10_000,
   running: { agent: string; hook: string } = { agent: agentVersion(), hook: hookVersion() },
+  platform = `${process.platform}-${process.arch}`,
 ): Promise<ClientVersion | null> {
   try {
-    const res = await fetchImpl(new URL("/v1/client-version", connection.url).toString(), {
+    const url = new URL("/v1/client-version", connection.url);
+    url.searchParams.set("platform", platform);
+    const res = await fetchImpl(url.toString(), {
       headers: { authorization: `Bearer ${connection.credential}` }, redirect: "error", signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) return null;
@@ -98,7 +105,7 @@ export async function fetchClientVersion(
     if (text === null) return null;
     const body = JSON.parse(text) as unknown;
     if (!body || typeof body !== "object" || Array.isArray(body)) return null;
-    const { policy, hook, agent, native_agent: nativeAgent, hook_bundle: hookBundle, intel } = body as Record<string, unknown>;
+    const { policy, hook, agent, native_agent: nativeAgent, native_platform: nativePlatform, hook_bundle: hookBundle, intel } = body as Record<string, unknown>;
     if (policy !== "recommended" && policy !== "hold") return null;
     const version = (v: unknown, current: string): string | null | undefined => {
       if (v === null || v === undefined) return null;
@@ -106,8 +113,10 @@ export async function fetchClientVersion(
     };
     const h = version(hook, running.hook), a = version(agent, running.agent), n = version(nativeAgent, running.agent);
     if (h === undefined || a === undefined || n === undefined) return null;
+    // A signed build named for another platform is not one this computer can install.
+    const forThisPlatform = nativePlatform === undefined || nativePlatform === null || nativePlatform === platform;
     const bundleTarget = readHookBundleTarget(hookBundle), intelTarget = readIntelTarget(intel);
-    return { policy, hook: h, agent: a, native_agent: n, ...(bundleTarget ? { hook_bundle: bundleTarget } : {}), ...(intelTarget ? { intel: intelTarget } : {}) };
+    return { policy, hook: h, agent: a, native_agent: forThisPlatform ? n : null, ...(bundleTarget ? { hook_bundle: bundleTarget } : {}), ...(intelTarget ? { intel: intelTarget } : {}) };
   } catch { return null; }
 }
 
