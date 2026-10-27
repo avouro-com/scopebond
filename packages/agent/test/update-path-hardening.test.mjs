@@ -83,7 +83,7 @@ function computer(cloudUrl) {
 }
 const CLOUD = "https://cloud.example.invalid";
 /** A workspace that answers /v1/client-version with `answer`, plus whatever registry routes are given. */
-const cloud = (answer, routes = {}) => serve({ [`${CLOUD}/v1/client-version`]: answer, ...routes });
+const cloud = (answer, routes = {}) => serve({ [`${CLOUD}/v1/client-version?platform=${process.platform}-${process.arch}`]: answer, ...routes });
 
 function claudeSettings(command) {
   const file = userHarnessFile("claude");

@@ -261,8 +261,28 @@ test("the agent reads the versions its workspace names, and treats anything odd 
   assert.equal(await fetchClientVersion(connection, fake), null, "a malformed version refuses the whole answer");
   assert.equal(await fetchClientVersion(connection, fake), null, "an unknown policy refuses the whole answer");
   assert.equal(await fetchClientVersion(connection, fake), null);
-  assert.equal(seen[0].url, "https://workspace.example/v1/client-version");
+  assert.equal(seen[0].url, `https://workspace.example/v1/client-version?platform=${process.platform}-${process.arch}`);
   assert.equal(seen[0].auth, "Bearer sbm_test");
+});
+
+test("the agent names its platform and installs only a signed build named for it", async () => {
+  const seen = [];
+  const answers = [
+    { policy: "recommended", hook: "0.15.0", agent: "0.2.0", native_agent: "0.1.9", native_platform: "darwin-arm64" },
+    { policy: "recommended", hook: "0.15.0", agent: "0.2.0", native_agent: "0.1.9", native_platform: "win32-x64" },
+    { policy: "recommended", hook: "0.15.0", agent: "0.2.0", native_agent: "0.1.9" },
+  ];
+  const fake = async (url) => { seen.push(url); return new Response(JSON.stringify(answers.shift()), { status: 200 }); };
+  const connection = { url: "https://workspace.example", credential: "sbm_test" };
+  const running = { agent: "0.1.0", hook: "0.14.0" };
+  const mac = await fetchClientVersion(connection, fake, 10_000, running, "darwin-arm64");
+  assert.equal(seen[0], "https://workspace.example/v1/client-version?platform=darwin-arm64");
+  assert.equal(mac.native_agent, "0.1.9", "the build named for this platform");
+  const other = await fetchClientVersion(connection, fake, 10_000, running, "darwin-arm64");
+  assert.equal(other.native_agent, null, "a build named for another platform is no update");
+  assert.equal(other.agent, "0.2.0", "the npm release is unaffected");
+  const older = await fetchClientVersion(connection, fake, 10_000, running, "win32-x64");
+  assert.equal(older.native_agent, "0.1.9", "a workspace that does not name a platform answers as before");
 });
 
 test("the self-check names what is broken locally and sends a signed proof to the workspace", async () => {
