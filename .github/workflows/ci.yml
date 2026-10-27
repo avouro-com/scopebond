@@ -158,6 +158,9 @@ jobs:
   single-executable:
     name: "single executable (windows)"
     runs-on: windows-latest
+    # A healthy run takes about four minutes. Without a limit, a stuck installer held the job for 45 minutes before
+    # GitHub cancelled it; the test now bounds every child process, and these limits bound the rest.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -170,12 +173,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
       - name: Build and run the single executable
+        timeout-minutes: 10
         run: node --test packages/native/test/sea.test.mjs
         env:
           SCOPEBOND_SEA: "1"
       # The installer (WiX 5, a local dotnet tool): silent install and removal per user and for every user, on this
       # throwaway runner only.
       - name: Install and remove the MSI
+        timeout-minutes: 15
         run: node --test packages/native/test/msi.test.mjs
         env:
           SCOPEBOND_MSI: "1"
