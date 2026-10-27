@@ -1,5 +1,48 @@
 # @scopebond/agent
 
+## 0.13.0
+
+### Minor Changes
+
+- 88c1e39: Unblocking from the Scopebond icon now allows only the next try of the blocked action on the computer itself. Any program running as you can reach the agent's local channel, including a coding agent, so an answer sent there cannot prove a person gave it. Choosing a longer unblock (15 minutes, 1 hour, until tomorrow, the workspace's number of days, or similar commands) no longer makes an allowance on the computer. Instead it sends your workspace a request that an admin approves in the web portal, and the action is allowed once in the meantime. If the computer is not connected to a workspace, only Allow once is possible. A one-time allowance made this way is marked `local_unverified` in the record sent to the workspace.
+- 5118c39: The macOS package updates itself. When the workspace recommends a newer signed build, the agent asks the package's root updater (`scopebond-agent update-daemon`, the LaunchDaemon `com.scopebond.updater`) for that version. The updater installs it only when it is newer, named by the release manifest signed with an updater key, the package that manifest names (SHA-256 and size), and signed with Avouro LLC's Developer ID Installer identity and notarized. A package that did not install is a failed update and is tried again later, as on Windows. The `AutoUpdate` preference (`false`), set by a configuration profile or in `/Library/Preferences`, turns this off.
+- f4600e8: On macOS, a signed install signs in to the workspace named by the `Workspace` preference of `com.scopebond.agent` (a configuration profile from device management first, then `/Library/Preferences`, then the person's own), and connects with its `InstallKey` without a code, as the Windows installer's `WORKSPACE=` and `KEY=` do. Beside the macOS installer package's LaunchAgent, `autostart on` and `off` enable and disable that LaunchAgent for the person in launchd instead of writing a second one, and `status` reads launchd's disabled list.
+- b6738a7: `scopebond-agent setup <url> --workspace=<id>` signs a computer in to the workspace the command was made for when it is connected to another workspace on the same address, instead of answering "already connected" (one address serves every workspace). Without `--workspace`, setup behaves as before; a malformed id is ignored.
+- 661719f: Removing Scopebond for every user on Windows (`msiexec /x … ALLUSERS=1`, Intune, Group Policy) now also takes it out of every other person's coding-agent settings, at their next sign-in. The removal leaves a copy of the agent in `Program Files\Scopebond Cleanup` and a Windows Active Setup entry; at each person's next sign-in Windows runs `scopebond-agent uninstall --signed-in` as that person, with no window, which removes the hook from their settings and tells their workspace. It does nothing for someone who never used Scopebond, or when Scopebond has been installed again. Installing for every user again removes the entry and the copy.
+- c7a43a5: On Windows, a signed update that installs but does not start is taken back: the agent's update helper fetches and checks the previous release's installer, removes the new version without telling the workspace or touching the hook entries, installs the previous one again with the workspace it had, and checks that it answers. The failed version is still not tried again for a day.
+
+### Patch Changes
+
+- 9b33cdd: On macOS, beside the package's menu-bar app (`/Applications/Scopebond.app`), the agent no longer posts its own notifications: the app notifies, as the native tray does on Windows.
+- 4db76b9: On macOS the signed executable never takes the Windows installer's update path. When the workspace recommends a newer signed build, it logs that a new package updates this computer. It downloads no installer, records no failed update to retry, and offers no update in the tray. On Windows nothing changes.
+- 8bd123f: On macOS the package's agent takes over from an agent installed with npm, as the Windows installer's does. It stops the npm agent, replaces npm's own LaunchAgent and launcher with the package's LaunchAgent, and points every Scopebond hook entry at `/usr/local/bin/scopebond-agent`. It then says once how to remove the npm package (`npm uninstall -g @scopebond/agent`), and `status` notes either install while the other is there. `autostart on` beside the package lets a label loaded from another LaunchAgent give way to the package's.
+- cdfe8e0: On macOS, the executable the installer package puts in `/usr/local/bin` counts as installed for every user: it never tries to update itself with the Windows installer, and `uninstall` names the package's removal script (`sudo "/Library/Application Support/Scopebond/uninstall.sh" --purge`) instead of `msiexec`. The executable run from anywhere else on a Mac names no installer.
+- e7e8275: On macOS, the package's root updater runs its own copy of the executable from `/Library/PrivilegedHelperTools/com.scopebond.updater`, a folder only root can write, instead of `/usr/local/bin/scopebond-agent` (which a person may own where another tool took over `/usr/local`). `update-daemon` refuses to run from anywhere else; the package's postinstall starts the updater only when its program, its property list and every folder above them are owned by root and writable by no one else; and a request file is opened without following links or waiting on a pipe, and read only when it is a regular file of at most 1 KiB.
+- 250b326: The agent names its platform when it asks the workspace which versions to run, and installs a signed build only when the workspace names one for that platform. A Mac is never offered the Windows build.
+- 29572b7: The hook now trusts less of the environment it runs in.
+  
+  - The signed installer's hook reads `SCOPEBOND_HOME`, `SCOPEBOND_POLICY_KEYS_JSON`, `SCOPEBOND_PACK_ENGINE_LEVEL` and the `SCOPEBOND_POLICY_SYNC` settings only from its own hook command (`--setting NAME=VALUE`), never from environment variables, so a variable set for later sessions cannot move its folder or add a key it trusts. npm installs keep reading them from the environment.
+  - While `NODE_PATH` is set, or `NODE_OPTIONS` carries a flag that can load or change code (such as `--require`, `--import`, `--loader`, `--inspect`, `--eval` or `--env-file`), a hook call blocks the action and says why. Memory and diagnostics flags such as `--max-old-space-size`, `--no-warnings` or `--enable-source-maps` do not block. `doctor`, `status` and the other commands still run, and `doctor` names the variable and the flag.
+  - Scopebond's own folder is found from your operating system account's home folder, not from `HOME` or `USERPROFILE`. When they differ, the account's folder is used and `doctor` says so.
+  - Setting any of these variables when starting a coding agent, or for every later session, now counts as switching Scopebond off.
+  - When `SCOPEBOND_HOOK_DIR` names a trusted project, allowances and workspace rules documents in that project are no longer used to let a blocked action through; those come from your own Scopebond folder.
+- Updated dependencies [a32c449]
+- Updated dependencies [7b01325]
+- Updated dependencies [29572b7]
+- Updated dependencies [62f8056]
+- Updated dependencies [b2a66ae]
+- Updated dependencies [2ff51fa]
+- Updated dependencies [eccc2ec]
+- Updated dependencies [8c47138]
+- Updated dependencies [dbe2739]
+- Updated dependencies [48e90fd]
+- Updated dependencies [1ca58df]
+- Updated dependencies [c84fc74]
+- Updated dependencies [2ac8706]
+- Updated dependencies [f2e94d1]
+  - @scopebond/hook@0.33.0
+  - @scopebond/gateway@0.20.8
+
 ## 0.12.0
 
 ### Minor Changes
