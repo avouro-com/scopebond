@@ -2654,7 +2654,7 @@ const COMMANDS: Array<{ name: string; args?: string; summary: string; detail?: s
       "Packs live in the packs folder of .scopebond/ (index.json and one <id>@<version>.json per pack). Local packs you write",
       "are named in rules.json (\"packs\": { \"local\": [\"team-packs/my-team.json\"] }) and only add rules; list shows them too.",
     ] },
-  { name: "intel", args: "show [--json] [--raw]",
+  { name: "intel", advanced: true, args: "show [--json] [--raw]",
     summary: "what the next upload of records to your workspace will contain",
     detail: [
       "show runs this computer's own record uploader against a copy of its delivery queue and prints what it would send,",

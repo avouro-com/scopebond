@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
-const ADVANCED = ["budget", "delegation", "capabilities", "observations", "policy", "prune", "trust", "dedupe"];
+const ADVANCED = ["budget", "delegation", "capabilities", "observations", "policy", "prune", "trust", "dedupe", "intel"];
 const listed = (help) => new Set([...help.matchAll(/^ {2}([a-z]+) {2,}/gm)].map((m) => m[1]));
 
 test("help: the default lists everyday commands and points to help --advanced, which lists the rest", () => {
@@ -23,6 +23,7 @@ test("help: the default lists everyday commands and points to help --advanced, w
   assert.doesNotMatch(advanced, /no such command/);
   // An advanced command's own help still works.
   assert.match(execFileSync(process.execPath, [cli, "help", "trust"], { encoding: "utf8" }), /^scopebond-hook trust/);
+  assert.match(execFileSync(process.execPath, [cli, "help", "intel"], { encoding: "utf8" }), /^scopebond-hook intel/);
 });
 
 test("doctor --json: one JSON document, scopebond.doctor.v1, every check named, failing ones with their fix", () => {
