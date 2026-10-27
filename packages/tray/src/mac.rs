@@ -17,6 +17,8 @@ pub const TRAY_LABEL: &str = "com.scopebond.tray";
 pub const TRAY_PLIST: &str = "/Library/LaunchAgents/com.scopebond.tray.plist";
 /// The agent program the package installs.
 pub const AGENT_PROGRAM: &str = "/usr/local/bin/scopebond-agent";
+/// The package's uninstall script (it needs an administrator).
+pub const UNINSTALL_SCRIPT: &str = "/Library/Application Support/Scopebond/uninstall.sh";
 
 fn output(program: &str, args: &[&str]) -> Option<String> {
     let out = Command::new(program).args(args).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
@@ -50,6 +52,33 @@ fn osascript(script: &[&str; 3], title: &str, text: &str) -> bool {
     }
     args.extend([title, text]);
     succeeds("/usr/bin/osascript", &args)
+}
+
+/// Uninstall Scopebond…: ask first, then run the package's uninstall script behind macOS's own administrator prompt, and
+/// say what it did. The script's path reaches AppleScript as an argument. The script stops this app too, so the dialog
+/// runs in its own process group, which launchd leaves alone when it ends the app; exit 75 (the workspace could not be
+/// told) is a removal all the same.
+const UNINSTALL: [&str; 9] = [
+    "on run argv",
+    "display dialog \"Remove Scopebond from this Mac? Your coding agents will then run without its checks, and this Mac stops sending records to your workspace.\" with title \"Uninstall Scopebond\" buttons {\"Cancel\", \"Uninstall\"} default button \"Cancel\" cancel button \"Cancel\" with icon caution",
+    "try",
+    "set said to do shell script (quoted form of (item 1 of argv)) & \" || [ $? -eq 75 ]\" with administrator privileges",
+    "display dialog said with title \"Uninstall Scopebond\" buttons {\"OK\"} default button 1",
+    "on error problem number n",
+    "if n is not -128 then display dialog (\"Scopebond could not be removed: \" & problem) with title \"Uninstall Scopebond\" buttons {\"OK\"} default button 1",
+    "end try",
+    "end run",
+];
+
+/// Start the Uninstall Scopebond… dialog; false when it could not start.
+pub fn uninstall() -> bool {
+    use std::os::unix::process::CommandExt;
+    let mut args: Vec<&str> = Vec::new();
+    for line in UNINSTALL {
+        args.extend(["-e", line]);
+    }
+    args.push(UNINSTALL_SCRIPT);
+    Command::new("/usr/bin/osascript").args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0).spawn().is_ok()
 }
 
 /// A message box with one button.
@@ -157,5 +186,17 @@ mod tests {
             assert!(!line.contains("{title}") && !line.contains("{text}"));
         }
         assert!(NOTIFICATION[1].contains("item 2 of argv") && DIALOG[1].contains("item 1 of argv"));
+    }
+
+    #[test]
+    fn uninstall_asks_first_and_takes_the_script_as_an_argument() {
+        let script = UNINSTALL.join("\n");
+        assert!(!script.contains(UNINSTALL_SCRIPT), "the path is an argument, never AppleScript source");
+        assert!(script.contains("quoted form of (item 1 of argv)"));
+        let ask = UNINSTALL.iter().position(|l| l.contains("cancel button \"Cancel\"")).unwrap();
+        let run = UNINSTALL.iter().position(|l| l.contains("with administrator privileges")).unwrap();
+        assert!(ask < run, "it asks before it removes anything");
+        assert!(UNINSTALL[run].contains("[ $? -eq 75 ]"), "a workspace that could not be told is still a removal");
+        assert!(script.contains("if n is not -128"), "Cancel at the administrator prompt says nothing");
     }
 }
