@@ -1,6 +1,6 @@
 {
   "name": "@scopebond/hook",
-  "version": "0.32.0",
+  "version": "0.33.0",
   "description": "See and block what Claude Code, Cursor, OpenAI Codex and GitHub Copilot do. Monitor or Block rules and a signed record for each action. Open source (Apache-2.0); works without an account.",
   "license": "Apache-2.0",
   "author": "Avouro LLC",

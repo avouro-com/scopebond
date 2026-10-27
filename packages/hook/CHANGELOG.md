@@ -1,5 +1,54 @@
 # @scopebond/hook
 
+## 0.33.0
+
+### Minor Changes
+
+- 29572b7: The hook now trusts less of the environment it runs in.
+  
+  - The signed installer's hook reads `SCOPEBOND_HOME`, `SCOPEBOND_POLICY_KEYS_JSON`, `SCOPEBOND_PACK_ENGINE_LEVEL` and the `SCOPEBOND_POLICY_SYNC` settings only from its own hook command (`--setting NAME=VALUE`), never from environment variables, so a variable set for later sessions cannot move its folder or add a key it trusts. npm installs keep reading them from the environment.
+  - While `NODE_PATH` is set, or `NODE_OPTIONS` carries a flag that can load or change code (such as `--require`, `--import`, `--loader`, `--inspect`, `--eval` or `--env-file`), a hook call blocks the action and says why. Memory and diagnostics flags such as `--max-old-space-size`, `--no-warnings` or `--enable-source-maps` do not block. `doctor`, `status` and the other commands still run, and `doctor` names the variable and the flag.
+  - Scopebond's own folder is found from your operating system account's home folder, not from `HOME` or `USERPROFILE`. When they differ, the account's folder is used and `doctor` says so.
+  - Setting any of these variables when starting a coding agent, or for every later session, now counts as switching Scopebond off.
+  - When `SCOPEBOND_HOOK_DIR` names a trusted project, allowances and workspace rules documents in that project are no longer used to let a blocked action through; those come from your own Scopebond folder.
+- 62f8056: The five-minute rules check reports how many actions the hook blocked in the last 24 hours because it failed itself, and the newest kind (`x-scopebond-hook-failures: <count>;<kind>`, never a message), so the workspace can show it on the computer's page. The hook advertises the `hook_failures` capability; no failure, no header.
+- 2ff51fa: The default `help` lists the everyday commands; `help --advanced` adds `budget`, `delegation`, `capabilities`, `observations`, `policy`, `prune`, `trust` and `dedupe`, which still work as before. `doctor --json` prints the same checks as one JSON document (`scopebond.doctor.v1`: each check's `name`, `ok`, `detail` and, when it fails, `fix`, plus the `problems` count) and exits as `doctor` does. The repository's `engines.node` is `>=22.13`, the floor the hook already enforces.
+- dbe2739: Signed workspace rules can no longer be stripped or replaced on the way. Once this computer has received one correctly signed answer from its workspace, it accepts only signed answers from it: an unsigned rules answer, a "use your own rules" answer without a signature, and a refused connection without the workspace's signed revocation all leave the rules in force (a signed revocation still disconnects the computer). Each signed answer now says how long it may be relied on (72 hours); a "nothing changed" answer extends that, and renews the cached rule packs, only when it carries a signed freshness proof. If no fresh signed answer arrives in time, the workspace's allowances stop letting blocked actions through until the next one, while its rules stay in force; `doctor` says so. Computers that have never received a signed answer work as before.
+- c84fc74: A coding-agent tool Scopebond has no mapping for is no longer let through unchecked. Tools that only read, only load a skill's instructions, or only manage the agent's own task list, plan or questions to you (for example Claude Code's `TodoWrite`, `AskUserQuestion`, `WebSearch`, `Task` and `Skill`, Copilot's `read_bash`, Codex's `update_plan`) are recorded as before. Any other unmapped tool is now blocked in every mode, with a message naming the tool; where the coding agent can ask you (Claude Code in a mode that prompts, Cursor, the GitHub Copilot CLI), you are asked instead. To allow such a tool, add its `tool.<name>` type (for `BrandNewTool`, `tool.brandnewtool`) to `observe` in `.scopebond/rules.json` and run `scopebond rules apply`; on a computer your workspace manages, ask an admin. A later Scopebond update may also map it. Codex's `view_image` is now checked as a read of the image file. `SCOPEBOND_HOOK_STRICT` is unchanged.
+- 2ac8706: On a computer whose rules your workspace sets with signed answers, the hook now checks the rules files it uses against the signed answer they came from, not only when it downloads them. The answer is kept as received (`managed-answer.json`, beside `policy.json`) with what it compiled to, and the compiled rules, the workspace's rules document and the rule pack list are checked against it each time one of them changes (an unchanged computer pays only a few file checks per action). If any of them was changed outside Scopebond, even into a file that still reads correctly, the action is blocked with the reason, and the rules are fetched from the workspace and installed again at once. `packs add` and `packs remove` now say the workspace sets the rule packs where its signed answer names them. Computers that use their own rules, or whose workspace does not sign its answers, work as before.
+
+### Patch Changes
+
+- a32c449: Harden the always-on self-protection so it no longer depends on the policy file. The
+  floor is now re-applied in code every time the hook loads its rules, so a rules file
+  with the protection clauses removed or weakened still blocks reading and writing
+  Scopebond's own files and the coding tools' hook settings.
+  
+  This also closes several ways an action could slip past the floor:
+  
+  - An archive extraction or patch whose targets the command does not name (`tar -x`,
+    `unzip`, `patch`, `git apply`) is now blocked when it runs in your home folder, or in
+    or next to a protected folder (Scopebond's own folder, `~/.claude`, `~/.cursor`,
+    `~/.codex`). In ordinary project folders it behaves as before.
+  - A program built at run time — a shell function or brace list used as the command
+    word, PowerShell string building, aliases, `Start-Process`, or a .NET file call — is
+    blocked when it could reach a protected file.
+  - A glob that could match any file inside a protected folder is blocked, not only the
+    file names the matcher happened to know.
+  - A read or write through a symbolic link or junction is judged by where it really
+    leads.
+  - The hook and agent installed globally with npm are protected like the signed
+    installer's program folder.
+- 7b01325: `doctor` on macOS checks the signed program. It fails, with the command that fixes it, when the program carries Gatekeeper's quarantine. For the installer package's program it also fails when the package's LaunchAgent is not running the agent for you (turning autostart off on purpose is fine) or when the package's updater is missing.
+- b2a66ae: Each hook call is faster: about 85 ms instead of about 150 ms on an Apple M2 Max, measured with `scripts/bench-hook.mjs`. Coding agents run the hook on every tool call, so every call waits less. The package now ships the command line as one bundled file, `dist/cli-bundle.js`, which `dist/cli.js` loads instead of about a hundred separate modules. Hook calls (`claude`, `codex`, `cursor`, `copilot`) also keep Node's compile cache in a `.compile-cache` folder beside the package. When that folder is read-only there is no cache and no message, and `NODE_DISABLE_COMPILE_CACHE=1` turns the cache off. Talking to the Scopebond Agent no longer loads Node's fetch implementation on every call. The library (`exports`), the commands and the fail-closed answers are unchanged: a bundle that cannot load still denies in each agent's format.
+- eccc2ec: `doctor` no longer reports the signed single executable on macOS and Linux (`"/…/scopebond-agent" hook claude`) as a hook command that cannot start: a program with no `.js` or `.exe` extension now counts as startable while it exists.
+- 8c47138: A nested script is read in the language of the program that runs it. `pwsh`/`powershell -Command` (and a decoded `-EncodedCommand`) and `Invoke-Expression` are read as PowerShell, so a backtick escape (``Get-Content ~/.sc`opebond/agent.key``) or a string join no longer hides a protected file. `cmd /c` and `cmd /k` are read as cmd: `^` escapes are applied and `&`, `&&`, `||`, `|` separate commands; a command that expands a variable (`%NAME%`, `!NAME!`) is treated as known only at run time, so a rule that would apply to it denies. An encoded command that cannot be decoded stays opaque. Ordinary nested commands map as before.
+- 48e90fd: The README is shorter: it covers installing, changing the rules, what each coding agent can stop, connecting to a workspace, what leaves your computer and how it works, and links the rest to the hook reference at scopebond.com/documentation/hook-reference. `intel` moves to `help --advanced`.
+- 1ca58df: The always-on protection covers the shell startup files (`.zshrc`, `.bashrc`, `.profile`, `.zshenv`, fish and PowerShell profiles, `/etc/profile.d`, `environment.d`): a line the coding agent added there would run in every later session, the next agent's included. A command that sets a variable moving Scopebond's folder (`SCOPEBOND_HOME`, `SCOPEBOND_HOOK_DIR`) or a coding agent's for every later session (`setx`, `launchctl setenv`, a User or Machine `SetEnvironmentVariable`) is a switch-off, as is starting a coding agent with Scopebond's folder moved. Once a person's own install exists, a hook call honours `SCOPEBOND_HOOK_DIR` only for that install or a folder whose policy the person trusted. A policy on disk is upgraded to the new protection when it loads.
+- f2e94d1: Trailing slashes are trimmed from the workspace address (rules check, Safe Install verdicts) and from working folders in one linear pass, so an address with a long run of slashes can no longer make the hook spend time that grows with the square of its length.
+- Updated dependencies [c84fc74]
+  - @scopebond/gateway@0.20.8
+
 ## 0.32.0
 
 ### Minor Changes
