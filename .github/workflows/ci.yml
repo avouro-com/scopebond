@@ -119,6 +119,13 @@ jobs:
         env:
           SCOPEBOND_PKG: "1"
           SCOPEBOND_PKG_INSTALL: "1"
+      # The journey a person takes: the agent from npm, a sign-in with a code against a stand-in workspace, then the
+      # package over it, which takes the npm install over; a push to main blocked and delivered; doctor; uninstall.
+      - name: macOS journey (npm install, the package over it, block and deliver, uninstall)
+        timeout-minutes: 20
+        run: node --test packages/native/test/macos-journey.test.mjs
+        env:
+          SCOPEBOND_MACOS_JOURNEY: "1"
 
   # The clean-machine Windows journey (powershell.exe, pwsh.exe, a standard user), one job each,
   # in parallel with everything else. It packs the hook and agent itself.
