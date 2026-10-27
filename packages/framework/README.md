@@ -4,7 +4,8 @@
 Scopebond Cloud, the hosted shared workspace, is a separate proprietary service
 and is not included in this package.
 
-**Status:** preview. The guard works and is tested, but its API may still change between minor versions.
+**Status:** frozen. The guard works and is tested, and it is maintained for security fixes only: no new features,
+and its API does not change.
 
 Add a guard so supported tools check your policy before execution and record a
 signed receipt. The framework must call the guard and honor its decision; tools
