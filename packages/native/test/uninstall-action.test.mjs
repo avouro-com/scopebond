@@ -31,3 +31,28 @@ test("it runs as the person removing Scopebond, logs what it says, and its exit 
   assert.match(scheduled, /Before="RemoveFiles"/, "before the agent's files go");
   assert.match(scheduled, /Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND ROLLBACK &lt;&gt; &quot;1&quot;"/, "a removal, not an upgrade, and not the update helper taking back a version that did not start");
 });
+
+test("removing an install for every user leaves the removal for each person's next sign-in, as the system account", () => {
+  const value = element(/<SetProperty Id="RegisterAllUsersCleanup"[^>]*\/>/);
+  assert.match(value, /Value="&quot;\[INSTALLFOLDER\]scopebond-agent\.exe&quot; allusers-cleanup register &quot;\[ProgramFiles64Folder\]Scopebond Cleanup&quot;"/);
+  const action = element(/<CustomAction Id="RegisterAllUsersCleanup"[^>]*\/>/);
+  assert.match(action, /DllEntry="WixQuietExec"/);
+  assert.match(action, /Execute="deferred"/);
+  assert.match(action, /Impersonate="no"/, "the system account writes HKLM and Program Files");
+  assert.match(action, /Return="ignore"/);
+  const scheduled = element(/<Custom Action="RegisterAllUsersCleanup"[^>]*\/>/);
+  assert.match(scheduled, /After="ReportUninstall"/, "after this account's own removal, and so before the files go");
+  assert.match(scheduled, /Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND ROLLBACK &lt;&gt; &quot;1&quot; AND \?MachinePath = 3"/,
+    "a removal of an install for every user, not an upgrade or the update helper's take-back");
+});
+
+test("installing for every user takes a waiting removal for each person away first", () => {
+  const value = element(/<SetProperty Id="UnregisterAllUsersCleanup"[^>]*\/>/);
+  assert.match(value, /allusers-cleanup unregister &quot;\[ProgramFiles64Folder\]Scopebond Cleanup&quot;"/);
+  const action = element(/<CustomAction Id="UnregisterAllUsersCleanup"[^>]*\/>/);
+  assert.match(action, /Impersonate="no"/);
+  assert.match(action, /Return="ignore"/);
+  const scheduled = element(/<Custom Action="UnregisterAllUsersCleanup"[^>]*\/>/);
+  assert.match(scheduled, /After="InstallFiles"/, "the new agent is there to run");
+  assert.match(scheduled, /Condition="NOT REMOVE AND ALLUSERS = &quot;1&quot;"/);
+});

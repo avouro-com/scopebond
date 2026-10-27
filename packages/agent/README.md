@@ -77,11 +77,12 @@ Node.js nor npm: one signed program is both the agent and the hook, and the Scop
   told within a few seconds is said there and the exit code is 75, and the removal goes on either way. The last line names
   the Scopebond folder, which stays (keys and records not yet sent) unless it was removed with `msiexec /x … PURGE=1`.
   From npm, `scopebond-agent uninstall` (and the Settings -> Apps entry of an npm install) does the same and ends the same
-  way; `scopebond-agent uninstall --purge` removes the folder too. An install for every user removed by a deployment tool (Intune, Group Policy, the system account) cleans only the
-  profile it runs as: the agent does not edit other people's profiles. Before removing it for everyone, have each person
-  run `scopebond-agent uninstall` (or remove it for them as them); afterwards, any hook entries left in someone's
-  settings point at a program that is gone, and `status` and the daily self-check name that file
-  (`hook_starts`). Installing Scopebond again, or taking the Scopebond entries out of those settings files, clears it.
+  way; `scopebond-agent uninstall --purge` removes the folder too. An install for every user removed by a deployment tool (Intune, Group Policy, the system account) cleans the
+  profile it runs as at once, and every other person's at their next sign-in: the removal leaves a copy of the agent in
+  `Program Files\Scopebond Cleanup` and a Windows Active Setup entry, which runs `scopebond-agent uninstall --signed-in`
+  once as each person, with no window (nothing for someone who never used Scopebond, or when it is installed again by
+  then). The agent never edits other people's profiles itself. Installing for every user again removes the entry and the
+  copy; `scopebond-agent allusers-cleanup unregister "C:\Program Files\Scopebond Cleanup"` as an administrator does too.
 
 ## macOS: the installer package
 

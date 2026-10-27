@@ -8,6 +8,8 @@ export type { Service, ServiceOptions, MaintenanceResult } from "./service.js";
 export { appsEntryValues, uninstallScript, writeUninstallScript, writeAppsEntry, refreshAppsEntry, removeAppsEntry, npmBeside, psQuote, UNINSTALL_KEY, UNINSTALL_SCRIPT, UTF8_BOM } from "./apps-entry.js";
 export { runUninstall, spawnHook, HOOK_UNINSTALL_TIMEOUT_MS } from "./uninstall.js";
 export type { UninstallOptions, HookRun, HookRunner } from "./uninstall.js";
+export { activeSetupVersion, cleanupFolder, registerCleanup, runCleanupCommand, signedInCleanup, stubPath, unregisterCleanup, ACTIVE_SETUP_KEY, CLEANUP_COMMAND, CLEANUP_EXE, CLEANUP_FOLDER_NAME, SIGNED_IN_FLAG } from "./allusers-cleanup.js";
+export type { CleanupFiles, CleanupOptions, RegRunner } from "./allusers-cleanup.js";
 export { awakeSinceAtStart, readAwake, writeAwake, AWAKE_FILE } from "./awake.js";
 export type { AwakeState } from "./awake.js";
 export { noteRunningVersion, recentUpdate, VERSION_SEEN_FILE, UPDATED_SHOWN_MS } from "./version-seen.js";

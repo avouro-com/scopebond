@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { buildSea } from "../build-sea.mjs";
@@ -152,6 +152,30 @@ test("with ALLUSERS=1 it installs for every user in Program Files, and removes c
   assert.equal(reg("HKLM\\Software\\Avouro\\Scopebond", "InstallPath"), null);
   assert.equal(onPath(MACHINE_ENV, folder), 0, "the folder is off the system's PATH");
   assert.ok(!existsSync(join(home, "msi-test-marker")), "PURGE=1 deleted the Scopebond folder");
+  // Removal for every user (the agent's allusers-cleanup.ts): a copy in Program Files\Scopebond Cleanup and an Active Setup
+  // entry, so each person's next sign-in takes Scopebond out of their own settings; installing for every user again takes
+  // both away.
+  const activeSetup = "HKLM\\SOFTWARE\\Microsoft\\Active Setup\\Installed Components\\{6C1E2B9A-4F3D-4E8B-9A57-3D2C1B0E8F64}";
+  const cleanupFolder = join(process.env.ProgramFiles, "Scopebond Cleanup");
+  const cleanup = join(cleanupFolder, "scopebond-agent.exe");
+  try {
+    assert.ok(existsSync(cleanup), `the copy for each person's sign-in is there: ${remove.log.slice(-3000)}`);
+    assert.match(reg(activeSetup, "StubPath") ?? "", /--headless ".*Scopebond Cleanup\\scopebond-agent\.exe" uninstall --signed-in$/);
+    assert.match(reg(activeSetup, "Version") ?? "", /^\d+,\d+,\d+,\d+$/);
+    // This person's sign-in after the removal: PURGE=1 took their Scopebond folder, so there is nothing to do.
+    const signIn = spawnSync(cleanup, ["uninstall", "--signed-in"], TOOL);
+    assert.equal(signIn.status, 0, `${signIn.stdout}${signIn.stderr}`);
+    const again = msiexec(["/i", msi, "ALLUSERS=1", `WORKSPACE=${TEST_WORKSPACE}`], join(logs, "msi-machine-reinstall.log"));
+    assert.equal(again.status, 0, again.log.slice(-3000));
+    assert.equal(reg(activeSetup, "StubPath"), null, "installing for every user again removes the Active Setup entry");
+    assert.ok(!existsSync(cleanup), "and the copy");
+    const last = msiexec(["/x", msi, "ALLUSERS=1"], join(logs, "msi-machine-remove-again.log"));
+    assert.equal(last.status, 0, last.log.slice(-3000));
+  } finally {
+    // The runner as it was: no entry and no copy left behind by this test.
+    spawnSync("reg", ["delete", activeSetup, "/f", "/reg:64"], TOOL);
+    rmSync(cleanupFolder, { recursive: true, force: true });
+  }
 });
 
 // With the native tray (SCOPEBOND_TRAY_EXE, the tray workflow's build): the installer starts the tray, the tray starts the

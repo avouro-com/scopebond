@@ -13,6 +13,8 @@
   Removing it runs `scopebond-agent.exe uninstall` first, as the person removing it: autostart off, the agent stopped,
   the hook taken out of the coding agents' settings and the workspace told. The Scopebond folder (keys, receipts) stays,
   unless PURGE=1 (the agent's `uninstall` with its purge option).
+  Removing an install for every user also leaves an Active Setup entry, so each other person's next sign-in does the same
+  for them (allusers-cleanup.ts in the agent).
 
   The install folder is added to PATH (this user's, or the system's with ALLUSERS=1), so `scopebond-agent status` works in
   a new terminal; removal takes it out again. An upgrade or a removal first asks a running agent to stop and closes any
@@ -165,9 +167,22 @@
     <SetProperty Action="SetReportUninstallPurge" Id="ReportUninstall" Value="&quot;[INSTALLFOLDER]scopebond-agent.exe&quot; uninstall --purge"
                  Before="ReportUninstall" Sequence="execute" Condition="PURGE = &quot;1&quot;" />
     <CustomAction Id="ReportUninstall" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Impersonate="yes" Return="ignore" />
+    <!-- Removal for every user (allusers-cleanup.ts in the agent). Removing an install for every user, as the system account
+         and before the files go: a copy of the agent in Program Files\Scopebond Cleanup and an Active Setup entry, so each
+         person's next sign-in takes Scopebond out of their own coding agents' settings (the removal above reaches only the
+         account that runs it). Installing for every user again takes the entry and the copy away first. Neither ever
+         stops the install or the removal. -->
+    <SetProperty Id="RegisterAllUsersCleanup" Value="&quot;[INSTALLFOLDER]scopebond-agent.exe&quot; allusers-cleanup register &quot;[ProgramFiles64Folder]Scopebond Cleanup&quot;"
+                 Before="RegisterAllUsersCleanup" Sequence="execute" />
+    <CustomAction Id="RegisterAllUsersCleanup" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Impersonate="no" Return="ignore" />
+    <SetProperty Id="UnregisterAllUsersCleanup" Value="&quot;[INSTALLFOLDER]scopebond-agent.exe&quot; allusers-cleanup unregister &quot;[ProgramFiles64Folder]Scopebond Cleanup&quot;"
+                 Before="UnregisterAllUsersCleanup" Sequence="execute" />
+    <CustomAction Id="UnregisterAllUsersCleanup" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred" Impersonate="no" Return="ignore" />
     <InstallExecuteSequence>
       <Custom Action="StopAgent" After="CostFinalize" Condition="(Installed OR WIX_UPGRADE_DETECTED) AND NOT UPGRADINGPRODUCTCODE AND ROLLBACK &lt;&gt; &quot;1&quot;" />
       <Custom Action="ReportUninstall" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND ROLLBACK &lt;&gt; &quot;1&quot;" />
+      <Custom Action="RegisterAllUsersCleanup" After="ReportUninstall" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND ROLLBACK &lt;&gt; &quot;1&quot; AND ?MachinePath = 3" />
+      <Custom Action="UnregisterAllUsersCleanup" After="InstallFiles" Condition="NOT REMOVE AND ALLUSERS = &quot;1&quot;" />
 <?ifdef TrayPath?>
       <Custom Action="StartTray" After="InstallFinalize" Condition="NOT REMOVE AND ALLUSERS &lt;&gt; &quot;1&quot;" />
 <?endif?>
