@@ -41,7 +41,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { rustup show }
           rustc --version
           cargo --version
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: packages/tray
       # The committed Cargo.lock decides every dependency. When Cargo.toml changed and the lockfile was not updated, the
@@ -206,7 +206,7 @@ jobs:
         run: |
           rustup toolchain install || rustup show
           rustc --version
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: packages/tray
       - name: Tests
