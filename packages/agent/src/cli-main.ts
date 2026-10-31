@@ -19,7 +19,7 @@ import { win32 } from "node:path";
 import { configuredHookCommands, hookCommandResolves, hookVersion, isEphemeralPath, userHarnessFile, userHome, UNINSTALL_CALLER_ENV } from "@scopebond/hook";
 import { computerStatus, expectedHarnesses } from "./agent.js";
 import { integrationHealth, type IntegrationHealth } from "./integration-health.js";
-import { AGENT_LOG_ENV, autostartHealth, disableAutostart, enableAutostart, startNow } from "./autostart.js";
+import { AGENT_LOG_ENV, autostartHealth, disableAutostart, enableAutostart, refreshPosixLauncher, startNow } from "./autostart.js";
 import { callAgent } from "./ipc.js";
 import { agentCliPath } from "./self.js";
 import { runSetup, workspaceFlag } from "./setup.js";
@@ -80,6 +80,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       if (log) writeOutputTo(log);
       // Started by an agent that just updated itself: let it exit first.
       await takeOver(dir, agentCliPath());
+      // An older macOS or Linux launcher knows fewer places Node may be, and says nothing when it finds none.
+      try { if (refreshPosixLauncher(dir, agentCliPath())) console.log(`${new Date().toISOString()} rewrote the autostart launcher for this version`); }
+      catch (error) { console.log(`${new Date().toISOString()} could not rewrite the autostart launcher: ${(error as Error).message}`); }
       // An npm install listed in Settings -> Apps: the entry runs this version's uninstall (an update replaced only the agent).
       if (installKind() === "npm") refreshAppsEntry(dir, { version: agentVersion(), cli: agentCliPath() });
       const service = await startService({ dir, onStopped: () => process.exit(0) });
@@ -103,7 +106,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     }
     case MAC_UPDATER_COMMAND: {
       // Internal: the macOS package's updater (LaunchDaemon com.scopebond.updater) runs this as root (mac-update.ts), from
-      // its own copy in /Library/PrivilegedHelperTools: never the copy in /usr/local/bin, which a person may own.
+      // its own copy in /Library/PrivilegedHelperTools (MAC_UPDATER_EXE), never any other copy of the executable.
       if (process.platform !== "darwin" || process.getuid?.() !== 0 || process.execPath !== MAC_UPDATER_EXE) {
         console.error(`${MAC_UPDATER_COMMAND} is run by the Scopebond package's updater itself`);
         process.exitCode = 1;

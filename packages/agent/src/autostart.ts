@@ -83,27 +83,50 @@ export function windowsLauncher(node: string, cli: string, logFile: string): str
   ].join("\r\n");
 }
 
-/** The macOS/Linux launcher. With `cli` empty, `node` is the single executable, started as it is. */
+/** Written into every macOS and Linux launcher this version makes. An older one knew only nvm and Homebrew's Node and
+ *  exited without a word when it found none; the agent rewrites it when it starts (refreshPosixLauncher). */
+export const POSIX_LAUNCHER_MARK = "# Scopebond Agent launcher 2:";
+
+/** The macOS/Linux launcher. With `cli` empty, `node` is the single executable, started as it is.
+ *
+ *  launchd and systemd start it with a bare PATH, so when the Node it was set up with is gone (a version manager removed
+ *  it) it looks where version managers keep a default Node in the person's home: nvm, fnm, Volta, mise and asdf, then
+ *  Homebrew's and the system's. When it finds none it says so in the agent's log (launchd's StandardErrorPath, systemd's
+ *  journal) and exits 1; launchd and systemd try again 30 seconds later. */
 export function posixLauncher(node: string, cli: string): string {
   const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
   if (cli === "") return `#!/bin/sh
-# Scopebond Agent launcher: the single executable.
+${POSIX_LAUNCHER_MARK} the single executable.
 exec ${q(node)} run
 `;
   return `#!/bin/sh
-# Scopebond Agent launcher: finds Node and the agent each time, so a Node upgrade never stops it.
+${POSIX_LAUNCHER_MARK} finds Node and the agent each time, so a Node upgrade never stops it.
 NODE=${q(node)}
 if [ ! -x "$NODE" ]; then
   [ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1
   NODE="$(command -v node 2>/dev/null)"
-  for candidate in /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node; do
+  # asdf's shims run asdf itself, which may be Homebrew's.
+  PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
+  for candidate in \\
+    "\${FNM_DIR:-$HOME/.local/share/fnm}/aliases/default/bin/node" \\
+    "$HOME/Library/Application Support/fnm/aliases/default/bin/node" \\
+    "\${VOLTA_HOME:-$HOME/.volta}/bin/node" \\
+    "\${MISE_DATA_DIR:-$HOME/.local/share/mise}/shims/node" \\
+    "\${ASDF_DATA_DIR:-$HOME/.asdf}/shims/node" \\
+    /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node; do
     [ -n "$NODE" ] && break
     [ -x "$candidate" ] && NODE="$candidate"
   done
 fi
+if [ -z "$NODE" ]; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) the Scopebond Agent cannot start: no Node found ($(printf '%s' ${q(node)}) is gone, and none was found with nvm, fnm, Volta, mise, asdf or Homebrew). Run \\\`scopebond-agent autostart on\\\` in a terminal where node works." >&2
+  exit 1
+fi
+# npm and the agent's own children find this Node first.
+PATH="$(dirname "$NODE"):$PATH"
+export PATH
 CLI=${q(cli)}
 [ -f "$CLI" ] || CLI="$(npm root -g 2>/dev/null)/@scopebond/agent/dist/cli.js"
-[ -n "$NODE" ] || exit 1
 exec "$NODE" --disable-warning=ExperimentalWarning "$CLI" run
 `;
 }
@@ -140,6 +163,7 @@ export function macLaunchAgent(launcher: string, logFile: string): string {
   <array><string>/bin/sh</string><string>${xml(launcher)}</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>30</integer>
   <key>StandardOutPath</key><string>${xml(logFile)}</string>
   <key>StandardErrorPath</key><string>${xml(logFile)}</string>
 </dict>
@@ -189,6 +213,17 @@ export function refreshLauncher(scopebondHome: string, cli: string, node = proce
   let text: string;
   try { text = readFileSync(launcher, "utf8"); } catch { return false; }
   if (launcherIsCurrent(text, platform)) return false;
+  writeLauncher(scopebondHome, node, cli, platform);
+  return true;
+}
+
+/** Rewrite a macOS or Linux launcher an older version made (without POSIX_LAUNCHER_MARK), with this Node. Safe while the
+ *  agent runs: the launcher's shell has already been replaced by the agent (`exec`). Whether it rewrote one. */
+export function refreshPosixLauncher(scopebondHome: string, cli: string, node = process.execPath, platform = process.platform): boolean {
+  if (platform === "win32") return false;
+  let text: string;
+  try { text = readFileSync(launcherPath(scopebondHome, platform), "utf8"); } catch { return false; }
+  if (text.includes(POSIX_LAUNCHER_MARK)) return false;
   writeLauncher(scopebondHome, node, cli, platform);
   return true;
 }

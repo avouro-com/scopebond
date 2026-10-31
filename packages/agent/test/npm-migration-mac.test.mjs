@@ -18,7 +18,7 @@ after(() => { for (const k of ["HOME", "USERPROFILE", "SCOPEBOND_HOME"]) { if (s
 const { userHarnessFile } = await import("@scopebond/hook");
 const { autostartPaths, findNpmInstall, hasNpmInstall, isNpmLauncher, launcherPackageDir, launcherPath, macLaunchAgent, migrateFromNpm, npmRemovalCommand, posixLauncher, readMigration } = await import("../dist/index.js");
 
-const EXE = "/usr/local/bin/scopebond-agent";
+const EXE = "/Library/PrivilegedHelperTools/scopebond-agent";
 const npmGlobal = join(root, "lib", "node_modules");
 const CLI = join(npmGlobal, "@scopebond", "agent", "dist", "cli.js");
 const mac = { skip: process.platform === "win32" && "macOS paths" };

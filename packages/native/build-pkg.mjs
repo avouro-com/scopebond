@@ -12,7 +12,9 @@
 // release workflow then notarizes and staples the signed package.
 //
 // The package installs, for every user of the Mac:
-//   /usr/local/bin/scopebond-agent                          the agent and the hook (on PATH in every new terminal)
+//   /Library/PrivilegedHelperTools/scopebond-agent           the agent and the hook, in a folder only root can write: the
+//                                                            LaunchAgent and every hook entry run this one
+//   /usr/local/bin/scopebond-agent                          a link to it (on PATH in every new terminal)
 //   /Library/LaunchAgents/com.scopebond.agent.plist          starts `scopebond-agent run` as each person who signs in
 //   /Library/LaunchDaemons/com.scopebond.updater.plist       the updater, as root: installs the next signed package
 //                                                            when a person's agent asks (`scopebond-agent update-daemon`)
@@ -21,7 +23,7 @@
 // (postinstall). Signing in, the hook entries and the workspace come from the agent, as after the Windows installer.
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { icns } from "./icon.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,13 +36,20 @@ const macos = join(here, "macos");
 export const PACKAGE_ID = "com.scopebond.agent";
 /** Where each file goes on the Mac, and the file it comes from (null: the executable given). */
 export const PAYLOAD = [
-  { path: "usr/local/bin/scopebond-agent", from: null, mode: 0o755 },
-  // The root updater's own copy of the executable, in a folder only root can write: the LaunchDaemon runs this one, never
-  // the copy in /usr/local/bin, which a person may own on a Mac where another tool took over /usr/local.
+  // The agent and the hook, in a folder only root can write. launchd runs it as every person who signs in, and every
+  // person's hook entries run it, so it never sits in /usr/local/bin, which a person may own on a Mac where another tool
+  // (Homebrew on Intel) took over /usr/local.
+  { path: "Library/PrivilegedHelperTools/scopebond-agent", from: null, mode: 0o755 },
+  // The root updater's own copy of the executable, in the same folder: the LaunchDaemon runs this one.
   { path: "Library/PrivilegedHelperTools/com.scopebond.updater", from: null, mode: 0o755 },
   { path: "Library/LaunchAgents/com.scopebond.agent.plist", from: join(macos, "com.scopebond.agent.plist"), mode: 0o644 },
   { path: "Library/LaunchDaemons/com.scopebond.updater.plist", from: join(macos, "com.scopebond.updater.plist"), mode: 0o644 },
   { path: "Library/Application Support/Scopebond/uninstall.sh", from: join(macos, "uninstall.sh"), mode: 0o755 },
+];
+/** Links the package adds: `scopebond-agent` on PATH in every new terminal. Only a terminal goes through it; whoever can
+ *  replace it there changes what their own PATH finds, never what launchd or a hook entry runs. */
+export const LINKS = [
+  { path: "usr/local/bin/scopebond-agent", to: "/Library/PrivilegedHelperTools/scopebond-agent" },
 ];
 /** With the menu-bar app: the app itself and its LaunchAgent. */
 export const TRAY_APP = "Applications/Scopebond.app";
@@ -130,6 +139,11 @@ export function buildPkg(exe = join(here, "build", "scopebond-agent"), { version
     mkdirSync(dirname(to), { recursive: true });
     copyFileSync(file.from ?? exe, to);
     chmodSync(to, file.mode);
+  }
+  for (const link of LINKS) {
+    const at = join(root, link.path);
+    mkdirSync(dirname(at), { recursive: true });
+    symlinkSync(link.to, at);
   }
   // The app as it was signed (ditto keeps its signature, modes and links).
   if (trayApp) {

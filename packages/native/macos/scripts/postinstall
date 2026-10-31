@@ -32,6 +32,11 @@ if root_only / /Library /Library/PrivilegedHelperTools "$HELPER" /Library/Launch
 else
   echo "Scopebond: the updater was not started: $HELPER or a folder above it can be changed by someone other than root." >&2
 fi
+# The agent launchd runs as every person, and every hook entry runs, is the copy in PrivilegedHelperTools (the link in
+# /usr/local/bin is for terminals). Said when someone other than root could change it; `scopebond-agent hook doctor` says so too.
+AGENT="/Library/PrivilegedHelperTools/scopebond-agent"
+root_only / /Library /Library/PrivilegedHelperTools "$AGENT" /Library/LaunchAgents "$PLIST" ||
+  echo "Scopebond: $AGENT, its LaunchAgent or a folder above them can be changed by someone other than root." >&2
 
 for uid in $(/bin/ps -axo uid=,comm= | /usr/bin/awk '$1 != 0 && $2 ~ /\/loginwindow$/ { print $1 }' | /usr/bin/sort -u); do
   /bin/launchctl bootstrap "gui/$uid" "$PLIST" 2>/dev/null || true

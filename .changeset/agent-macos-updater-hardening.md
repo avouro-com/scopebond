@@ -1,0 +1,5 @@
+---
+"@scopebond/agent": patch
+---
+
+On macOS, the package's root updater can no longer be switched off or steered by another account on the Mac. A folder, link or pipe named like a request is passed over and never stops it (a folder used to make every later run fail); each person counts once (the request file's owner, set by the system), with their latest request; versions are tried newest first, and one with no signed release (a request for 99.0.0) is passed over for the next one asked for. A new machine preference, `MaxVersion` of `com.scopebond.agent` (configuration profile or `/Library/Preferences`), caps the version the updater installs, whatever a request asks for, and the person's agent does not ask above it. After installing, the updater checks the new agent starts (the installed program answers with the new version, and launchd keeps the agent running for each person it is loaded for, within 3 minutes) and otherwise installs the release that ran before again, fetched and checked the same way, as the Windows update helper does; the person's agent records it as a failed update.

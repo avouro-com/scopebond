@@ -86,23 +86,34 @@ Node.js nor npm: one signed program is both the agent and the hook, and the Scop
 
 ## macOS: the installer package
 
-The same executable in a macOS installer package (`packages/native`, `build-pkg.mjs`): `/usr/local/bin/scopebond-agent`
-for every user of the Mac, and a LaunchAgent that runs `scopebond-agent run` as each person who signs in (the agent's own
-autostart label, so it never runs twice). It counts as installed for every user.
+The same executable in a macOS installer package (`packages/native`, `build-pkg.mjs`):
+`/Library/PrivilegedHelperTools/scopebond-agent` for every user of the Mac, in a folder only root can write, with a link
+to it at `/usr/local/bin/scopebond-agent` for terminals, and a LaunchAgent that runs `scopebond-agent run` as each person
+who signs in (the agent's own autostart label, so it never runs twice). The LaunchAgent and every hook entry run the
+program in PrivilegedHelperTools, never the link: a person may own `/usr/local/bin` (Homebrew on Intel), and launchd runs
+the program as every person. `scopebond-agent hook doctor` says when someone other than root could change the program or a
+folder above it. It counts as installed for every user.
 
 - **Updates.** The package carries an updater that runs as root (the LaunchDaemon `com.scopebond.updater`). When the
   workspace recommends a newer signed build, the person's agent asks it for that version, and nothing else. The updater
-  installs it only after the same checks as on Windows: newer than the one installed; the release manifest signed with
-  an updater key built into the program; the package's SHA-256 and size are the manifest's; and the package is signed
-  with Avouro LLC's Developer ID Installer identity and notarized (`pkgutil --check-signature`, `spctl`). The package's
-  own postinstall then starts the new agent for everyone signed in. A package that did not install counts as a failed
-  update and is tried again after 1 hour, 6 hours, then daily. An organization turns updates off with the `AutoUpdate`
-  preference (`false`) in a configuration profile or `/Library/Preferences/com.scopebond.agent`; the person's own value
-  does not turn them on or off.
+  counts one request per person (the request file's owner) and tries the versions asked for newest first; a version
+  with no signed release is passed over for the next, so a request for a version that does not exist cannot keep a real
+  release from installing. It installs one only after the same checks as on Windows: newer than the one installed; the
+  release manifest signed with an updater key built into the program; the package's SHA-256 and size are the
+  manifest's; and the package is signed with Avouro LLC's Developer ID Installer identity and notarized
+  (`pkgutil --check-signature`, `spctl`). The package's own postinstall then starts the new agent for everyone signed
+  in, and the updater checks it started: the installed program answers with the new version, and launchd keeps the
+  agent running for each person it is loaded for, within 3 minutes. If not, it installs the version that ran before
+  again (fetched and checked the same way), as the Windows update helper does. A package that did not install, or did
+  not start, counts as a failed update and is tried again after 1 hour, 6 hours, then daily. An organization turns
+  updates off with the `AutoUpdate` preference (`false`), or caps them with `MaxVersion` (`1.2.3`: nothing newer is
+  installed, whatever a request asks for), in a configuration profile or `/Library/Preferences/com.scopebond.agent`;
+  the person's own values change nothing.
 - The signed executable run from anywhere else on a Mac does not update itself: it never fetches the Windows installer,
   offers no update in the tray, and says in its log that a newer package is recommended. `sudo "/Library/Application Support/Scopebond/uninstall.sh"`
-removes it, running `scopebond-agent uninstall` first as the person removing it; `--purge` removes the Scopebond folder
-too.
+removes it, running `scopebond-agent uninstall` first as the person removing it (`--purge` removes their Scopebond
+folder too), then as every other person on the Mac who has a Scopebond folder (their folders stay), so nobody's coding
+agents keep calling a program that is gone.
 
 - **First run.** On its first start the agent signs in as after the Windows installer. The workspace and an install key
   come from the `Workspace` and `InstallKey` preferences of `com.scopebond.agent`, read in this order:
@@ -120,7 +131,8 @@ too.
   agent signs in to Scopebond Cloud.
 - **From an npm install.** When the package's agent starts (or `setup` runs) and finds the agent installed with npm, it
   takes over first: the npm agent is asked to stop, its LaunchAgent in `~/Library/LaunchAgents` and its launcher go
-  (autostart becomes the package's LaunchAgent), and every Scopebond hook entry runs `/usr/local/bin/scopebond-agent`.
+  (autostart becomes the package's LaunchAgent), and every Scopebond hook entry runs
+  `/Library/PrivilegedHelperTools/scopebond-agent`.
   The npm package stays where npm put it; the agent says once, and `status` keeps saying while it is there, that
   `npm uninstall -g @scopebond/agent` removes it.
 - **The menu-bar app.** The package also installs `/Applications/Scopebond.app` (`packages/tray`): the icon, menu,

@@ -22,7 +22,7 @@ export type { LaunchctlRunner, MacPackage } from "./autostart.js";
 export {
   launcherPath, windowsLauncher, posixLauncher, windowsRunCommand, macLaunchAgent, linuxUserUnit,
   enableAutostart, disableAutostart, autostartHealth, autostartPaths, startCommands, startNow, LABEL,
-  AGENT_LOG_ENV, LAUNCHER_MARK, launcherIsCurrent, refreshLauncher, retireLauncherRunValue, TRAY_RUN_VALUE,
+  AGENT_LOG_ENV, LAUNCHER_MARK, POSIX_LAUNCHER_MARK, launcherIsCurrent, refreshLauncher, refreshPosixLauncher, retireLauncherRunValue, TRAY_RUN_VALUE,
   MAC_PACKAGE_PLIST, macPackage, macLabelDisabled,
 } from "./autostart.js";
 export {
@@ -44,7 +44,7 @@ export type { ToolId, ToolReport, McpServerReport, ToolDiscovery, DiscoveryOptio
 export { setupPlan, otherWorkspace, workspaceFlag, agentOnThisComputer, globalBinDir, onPath, addToPathCommand, nodeSupported, runSetup } from "./setup.js";
 export type { SetupState, SetupStep, SetupOptions } from "./setup.js";
 export {
-  installKind, MAC_PACKAGE_EXE, MAC_TRAY_APP, updaterKeys, keyId, verifyManifest, fetchVerifiedInstaller, installerName, installerUnchanged, installerRecheckScript,
+  installKind, MAC_PACKAGE_EXE, MAC_PACKAGE_LINK, MAC_TRAY_APP, updaterKeys, keyId, verifyManifest, fetchVerifiedInstaller, installerName, installerUnchanged, installerRecheckScript,
   windowsTool, installHelper, nativeTrayPath, takeInstallResult, INSTALLER_CHECK_SCRIPT, INSTALL_RESULT, MANIFEST_DOMAIN, PUBLISHER,
   updatesDir, msiLogPath, helperCopyPath, removeOldHelpers, UPDATE_HELPER_COMMAND, UPDATE_PENDING_FILE, UPDATE_PENDING_MS, writeUpdatePending, readUpdatePending, clearUpdatePending,
 } from "./native-update.js";
@@ -68,6 +68,6 @@ export {
 export { maintainIntel, readIntelTarget, COMPONENT_SIGNATURE_HEADER, COMPONENT_KEY_ID_HEADER, type IntelTarget, type IntelOutcome, type IntelInstallOptions } from "./intel-install.js";
 export {
   MAC_UPDATER_LABEL, MAC_UPDATER_COMMAND, MAC_UPDATER_PLIST, MAC_UPDATER_EXE, MAC_UPDATER_PATHS, readRequest, MAC_INSTALLER_PUBLISHER, macPackageName, macAutoUpdate, macPackageSignature,
-  requestMacUpdate, readMacUpdateResult, takeMacUpdateResult, runMacUpdater, hasMacUpdater,
+  requestMacUpdate, readMacUpdateResult, takeMacUpdateResult, runMacUpdater, hasMacUpdater, macMaxVersion, macAgentStarted, launchdJob, MAC_UPDATE_START_DEADLINE_MS,
 } from "./mac-update.js";
 export type { MacUpdaterPaths, MacUpdaterOptions } from "./mac-update.js";

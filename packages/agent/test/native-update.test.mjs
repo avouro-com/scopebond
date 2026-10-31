@@ -31,6 +31,8 @@ test("the install kind: npm, per user, or for every user in Program Files or fro
   assert.equal(installKind("C:\\Users\\a\\AppData\\Local\\Programs\\Scopebond\\scopebond-agent.exe", true, "C:\\Program Files"), "per-user");
   assert.equal(installKind("C:\\Program Files\\Scopebond\\scopebond-agent.exe", true, "C:\\Program Files"), "per-machine");
   // The macOS package installs for every user; the same executable run from anywhere else is this user's.
+  assert.equal(installKind("/Library/PrivilegedHelperTools/scopebond-agent", true), "per-machine");
+  // An earlier package put the program itself in /usr/local/bin (started through the link, execPath is the program).
   assert.equal(installKind("/usr/local/bin/scopebond-agent", true), "per-machine");
   assert.equal(installKind("/opt/tools/scopebond-agent", true), "per-user");
   assert.equal(installKind("/usr/local/bin/scopebond-agent", false), "npm");
@@ -47,7 +49,7 @@ test("a release is installed only when the manifest, the digest and the publishe
   assert.deepEqual(tampered, { ok: false, reason: "the installer is not the one the manifest names" });
 
   const forged = await fetchVerifiedInstaller(VERSION, { dir, publicKey: k.pub, fetchImpl: release(k, { signWith: keys().priv }), check: signedBy("O=Avouro LLC") });
-  assert.deepEqual(forged, { ok: false, reason: "the release manifest is not signed by the updater key" });
+  assert.deepEqual(forged, { ok: false, reason: "the release manifest is not signed by the updater key", notARelease: true });
 
   const otherVersion = await fetchVerifiedInstaller(VERSION, { dir, publicKey: k.pub, fetchImpl: release(k, { version: "9.9.8" }), check: signedBy("O=Avouro LLC") });
   assert.match(otherVersion.reason, /for 9\.9\.8, not 9\.9\.9/);
@@ -62,7 +64,7 @@ test("a release is installed only when the manifest, the digest and the publishe
   assert.deepEqual(noKey, { ok: false, reason: "this build has no updater key" });
 
   const missing = await fetchVerifiedInstaller(VERSION, { dir, publicKey: k.pub, fetchImpl: async () => new Response("", { status: 404 }), check: signedBy("O=Avouro LLC") });
-  assert.deepEqual(missing, { ok: false, reason: "the release has no signed manifest" });
+  assert.deepEqual(missing, { ok: false, reason: "the release has no signed manifest", notARelease: true });
 });
 
 test("on Windows, the Authenticode check reads Windows' own verdict and the signer", { skip: process.platform !== "win32" && "Windows only" }, async () => {

@@ -15,8 +15,8 @@ pub const AGENT_LABEL: &str = "com.scopebond.agent";
 /// The menu-bar app's own LaunchAgent, which the package puts in /Library/LaunchAgents.
 pub const TRAY_LABEL: &str = "com.scopebond.tray";
 pub const TRAY_PLIST: &str = "/Library/LaunchAgents/com.scopebond.tray.plist";
-/// The agent program the package installs.
-pub const AGENT_PROGRAM: &str = "/usr/local/bin/scopebond-agent";
+/// The agent program the package installs, in a folder only root can write (never the link to it in /usr/local/bin).
+pub const AGENT_PROGRAM: &str = "/Library/PrivilegedHelperTools/scopebond-agent";
 /// The package's uninstall script (it needs an administrator).
 pub const UNINSTALL_SCRIPT: &str = "/Library/Application Support/Scopebond/uninstall.sh";
 

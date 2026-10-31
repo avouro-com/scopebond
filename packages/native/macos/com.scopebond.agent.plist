@@ -3,7 +3,8 @@
 <!-- The Scopebond Agent for each person who signs in to this Mac, as that person (the macOS installer package puts it in
      /Library/LaunchAgents). The label is the agent's own autostart label, so launchd never runs a second agent from a
      person's `scopebond-agent autostart on`. The agent writes its own log in the person's Scopebond folder, as it does
-     under the per-user autostart; a crash restarts it after 30 seconds, a clean exit (`scopebond-agent stop`) does not. -->
+     under the per-user autostart; a crash restarts it after 30 seconds, a clean exit (`scopebond-agent stop`) does not.
+     It runs the program in /Library/PrivilegedHelperTools, which only root can change, never the link in /usr/local/bin. -->
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.scopebond.agent</string>
@@ -11,7 +12,7 @@
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>SCOPEBOND_AGENT_LOG="${SCOPEBOND_HOME:-$HOME/.scopebond}/agent.log" exec /usr/local/bin/scopebond-agent run</string>
+    <string>SCOPEBOND_AGENT_LOG="${SCOPEBOND_HOME:-$HOME/.scopebond}/agent.log" exec /Library/PrivilegedHelperTools/scopebond-agent run</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>

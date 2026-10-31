@@ -44,10 +44,10 @@ import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary }
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
 import { connectWithInstallKey, FIRST_SIGNIN_FILE, installedKey, installedWorkspace, startFirstSignIn, type FirstSignIn, type RegistryReader } from "./signin.js";
 import { migrateFromNpm, readMigration, npmRemovalCommand } from "./migrate.js";
-import { hasMacUpdater, macAutoUpdate, MAC_UPDATER_PATHS, requestMacUpdate, takeMacUpdateResult, type MacUpdaterPaths } from "./mac-update.js";
+import { hasMacUpdater, macAutoUpdate, macMaxVersion, MAC_UPDATER_PATHS, requestMacUpdate, takeMacUpdateResult, type MacUpdaterPaths } from "./mac-update.js";
 import { enableAutostart } from "./autostart.js";
 import {
-  agentVersion, clearFailedUpdate, failedUpdate, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand, recentlyFailedUpdate, recordFailedUpdate, startCheck,
+  agentVersion, clearFailedUpdate, compareVersions, failedUpdate, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand, recentlyFailedUpdate, recordFailedUpdate, startCheck,
   updateTarget, type ClientVersion,
 } from "./update.js";
 import { runUpkeepApart, type UpkeepReport } from "./upkeep.js";
@@ -625,7 +625,9 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const pending = readUpdatePending(options.dir);
       if (newer && kind === "per-machine" && macUpdater) {
         // The macOS package, for every user: its root updater installs the next signed package when asked.
+        const cap = macMaxVersion();
         if (!macAutoUpdate()) log(`the workspace recommends the Scopebond Agent ${newer}; updates are turned off for this Mac (AutoUpdate), so it is updated by your organization`);
+        else if (cap !== null && compareVersions(newer, cap) > 0) log(`the workspace recommends the Scopebond Agent ${newer}; this Mac allows no version newer than ${cap} (MaxVersion), so it is updated by your organization`);
         else if (recentlyFailedUpdate(options.dir, newer)) log(`the Scopebond Agent ${newer} did not install or start here earlier; staying on ${current} for now`);
         else if (pending && pending.version === newer && Date.now() - pending.at < UPDATE_PENDING_MS) log(`the update to ${newer} is under way`);
         // Asked before and never reported back: recorded as a failed update, and asked again on the retry schedule.

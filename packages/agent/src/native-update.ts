@@ -63,8 +63,14 @@ function inDate(key: UpdaterKey, now: number): boolean {
 
 export type InstallKind = "npm" | "per-user" | "per-machine";
 
-/** Where the macOS installer package puts the executable: installed for every user of the Mac, by an administrator. */
-export const MAC_PACKAGE_EXE = "/usr/local/bin/scopebond-agent";
+/** Where the macOS installer package puts the executable: installed for every user of the Mac, by an administrator, in a
+ *  folder only root can write. The LaunchAgent and every hook entry run this one: launchd runs it as every person who
+ *  signs in, so it must not sit where a person can replace it (Homebrew on Intel makes /usr/local/bin a person's own). */
+export const MAC_PACKAGE_EXE = "/Library/PrivilegedHelperTools/scopebond-agent";
+/** The link on PATH the package adds to MAC_PACKAGE_EXE, so `scopebond-agent` works in every new terminal. Nothing that
+ *  runs on its own (launchd, a hook entry) goes through it. Packages built before this change put the executable itself
+ *  here. */
+export const MAC_PACKAGE_LINK = "/usr/local/bin/scopebond-agent";
 /** The macOS package's menu-bar app (packages/tray): it shows the agent's state and notifies, as the Windows tray does. */
 export const MAC_TRAY_APP = "/Applications/Scopebond.app";
 
@@ -72,7 +78,8 @@ export const MAC_TRAY_APP = "/Applications/Scopebond.app";
  *  package). */
 export function installKind(execPath = process.execPath, single = isSingleExecutable(), programFiles = process.env.ProgramFiles ?? "C:\\Program Files"): InstallKind {
   if (!single) return "npm";
-  if (execPath === MAC_PACKAGE_EXE) return "per-machine";
+  // Started through the link on PATH, execPath is already the file it points to (Node resolves it).
+  if (execPath === MAC_PACKAGE_EXE || execPath === MAC_PACKAGE_LINK) return "per-machine";
   // The folder without trailing separators (a loop, not a regular expression, on a value from the environment).
   let folder = programFiles.toLowerCase();
   while (folder.endsWith("\\") || folder.endsWith("/")) folder = folder.slice(0, -1);
@@ -128,7 +135,9 @@ export function authenticode(file: string): { valid: boolean; subject: string } 
 }
 
 export interface VerifiedInstaller { ok: true; path: string; version: string; sha256: string; size: number }
-export interface Refused { ok: false; reason: string }
+/** `notARelease`: there is no release of that version to install (no signed manifest could be fetched, its signature is
+ *  not an updater key's, it is for another version, or it names no installer for this computer). */
+export interface Refused { ok: false; reason: string; notARelease?: true }
 
 /** Download the installer for `version` and check it three ways. Nothing is kept unless every check passes. */
 export async function fetchVerifiedInstaller(version: string, o: {
@@ -149,12 +158,12 @@ export async function fetchVerifiedInstaller(version: string, o: {
     } catch { return null; }
   };
   const [text, signature] = await Promise.all([get(`scopebond-agent-${version}.manifest.json`), get(`scopebond-agent-${version}.manifest.json.sig`)]);
-  if (!text || !signature) return { ok: false, reason: "the release has no signed manifest" };
+  if (!text || !signature) return { ok: false, reason: "the release has no signed manifest", notARelease: true };
   const manifest = verifyManifest(text.toString("utf8"), signature.toString("utf8"), keys, o.now);
-  if (!manifest) return { ok: false, reason: "the release manifest is not signed by the updater key" };
-  if (manifest.version !== version) return { ok: false, reason: `the manifest is for ${manifest.version}, not ${version}` };
+  if (!manifest) return { ok: false, reason: "the release manifest is not signed by the updater key", notARelease: true };
+  if (manifest.version !== version) return { ok: false, reason: `the manifest is for ${manifest.version}, not ${version}`, notARelease: true };
   const entry = manifest.files.find((f) => f.name === (o.name ?? installerName(version)));
-  if (!entry) return { ok: false, reason: "the manifest names no installer" };
+  if (!entry) return { ok: false, reason: "the manifest names no installer", notARelease: true };
   const bytes = await get(entry.name);
   if (!bytes) return { ok: false, reason: "the installer could not be downloaded" };
   if (bytes.length !== entry.size || createHash("sha256").update(bytes).digest("hex") !== entry.sha256) return { ok: false, reason: "the installer is not the one the manifest names" };

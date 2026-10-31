@@ -2135,7 +2135,7 @@ async function runDoctor(args: string[] = []): Promise<void> {
   const cli = isSingleExecutable() ? process.execPath : cliPath();
   log(`  cli              ${cli} ${existsSync(cli) ? "ok" : "MISSING"}${isSingleExecutable() ? " (the signed installer's program)" : ""}`);
   check("cli", existsSync(cli), cli);
-  // macOS: the signed program's quarantine, and for the package's program its LaunchAgent and root updater.
+  // macOS: the signed program's quarantine, and for the package's program its owner, its LaunchAgent and root updater.
   if (process.platform === "darwin" && isSingleExecutable()) {
     for (const mac of macInstallChecks(process.execPath)) {
       log(`  ${mac.name.padEnd(16)} ${mac.ok ? `ok (${mac.detail})` : `BAD (${mac.detail})`}`);
