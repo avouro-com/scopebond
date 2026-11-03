@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadOrCreateAttester } from "@scopebond/gateway/node";
 import { createMcpProxy, connectCloud, loadMcpConnection, connectionFileFor, openExporter, starterMcpPolicy } from "../dist/index.js";
+import { listed } from "./listed.mjs";
 
 function startFakeCloud(attesterKid) {
   const ingested = [];
@@ -64,7 +65,7 @@ test("connect enrolls the proxy key and openExporter mirrors PEP receipts to Clo
       principal: { subject: "client:test", issuer: "scopebond:mcp-proxy" },
       server: "filesystem",
       attesterKeyPem: readFileSync(keyPath, "utf8"),
-      upstream: { call: async () => { forwarded = true; return { jsonrpc: "2.0", id: 1, result: { ok: true } }; } },
+      upstream: listed({ call: async () => { forwarded = true; return { jsonrpc: "2.0", id: 1, result: { ok: true } }; } }, ["read_file"]),
       onReceipt: (r) => exporter.enqueue(r),
     });
     // Allowed tool call: forwarded + a PEP receipt emitted and exported.
@@ -102,7 +103,7 @@ test("against the shared stand-in workspace, a failed delivery keeps the proxy's
       principal: { subject: "client:test", issuer: "scopebond:mcp-proxy" },
       server: "filesystem",
       attesterKeyPem: readFileSync(keyPath, "utf8"),
-      upstream: { call: async () => ({ jsonrpc: "2.0", id: 1, result: { ok: true } }) },
+      upstream: listed({ call: async () => ({ jsonrpc: "2.0", id: 1, result: { ok: true } }) }, ["read_file"]),
       onReceipt: (r) => exporter.enqueue(r),
     });
     cloud.fault("ingest", { status: 500, times: 1 });

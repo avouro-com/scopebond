@@ -19,14 +19,14 @@ const POLICY = {
 const TOOLS = [{ name: "update_file", description: "write a file", inputSchema: { type: "object", properties: { repository: { type: "string" } } } }];
 const MANIFEST = { hash: manifestHash(TOOLS), tools: { update_file: { operation_class: "mutation", resources: [{ arg: "repository", kind: "repository" }] } } };
 
-function upstream() {
+function upstream(tools = TOOLS) {
   const seen = [];
   return {
     seen,
     calls: () => seen.filter((m) => m.method === "tools/call"),
     async call(m) {
       seen.push(m);
-      if (m.method === "tools/list") return { jsonrpc: "2.0", id: m.id, result: { tools: TOOLS } };
+      if (m.method === "tools/list") return { jsonrpc: "2.0", id: m.id, result: { tools } };
       return { jsonrpc: "2.0", id: m.id ?? null, result: { content: [{ type: "text", text: "ran" }] } };
     },
   };
@@ -102,7 +102,7 @@ test("the typed adapter denies arguments holding two keys equal under case foldi
 });
 
 test("the forwarded message is rebuilt from the members the proxy read", async () => {
-  const up = upstream();
+  const up = upstream([...TOOLS, { name: "list_issues" }]);
   const proxy = proxyWith(up);
   await proxy.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", extra: "x", params: { name: "list_issues", arguments: { q: "a" }, _meta: { progressToken: "p" }, other: 1 } });
   assert.deepEqual(up.seen.at(-1), { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_issues", arguments: { q: "a" }, _meta: { progressToken: "p" } } });

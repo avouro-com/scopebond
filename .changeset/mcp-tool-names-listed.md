@@ -1,0 +1,5 @@
+---
+"@scopebond/mcp": patch
+---
+
+The proxy now checks each `tools/call` name against the upstream server's own tool list: the last full `tools/list` the client fetched, or one the proxy reads from the upstream itself (again after the recheck interval, a minute by default, or when a call names a tool the list lacks). An upstream that resolves tool names loosely (another case, a full-width form) could otherwise run a tool a rule denies by its exact name. The check finds a name that is not listed (`unlisted`), another spelling of a listed tool with case and width folded as member names are (`spelling_variant`), a name the upstream lists twice up to case or width (`ambiguous`), or no readable tool list (`no_list`), and records the finding on the receipt's action as `tool_listing`. In enforce mode (a typed adapter in `enforce`, or without one a policy with a clause that is not `monitor`) such a call is denied, so there an upstream that does not answer `tools/list` has its calls denied. In monitor mode (a typed adapter in `monitor`, or a policy whose clauses all monitor) the finding is only recorded and the call is forwarded.

@@ -5,10 +5,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { createMcpProxy } from "../dist/index.js";
+import { listed } from "./listed.mjs";
 
 const pem = generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" }).toString();
 const principal = { subject: "client:bounded", issuer: "scopebond:mcp-proxy" };
-const upstream = { call: async (m) => ({ jsonrpc: "2.0", id: m.id ?? null, result: { ok: true } }) };
+const upstream = listed({ call: async (m) => ({ jsonrpc: "2.0", id: m.id ?? null, result: { ok: true } }) }, ["read_file", "write_file"]);
 const stateless = { vocabulary_version: "1.0", policy_id: "mcp", version: 1, clauses: [
   { id: "fs", type: "action_allowlist", mode: "enforce", action_types: ["mcp.tool.call"], param_bounds: { server: { enum: ["filesystem"] } } },
 ] };

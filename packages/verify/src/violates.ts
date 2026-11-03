@@ -176,7 +176,8 @@ interface ParamBound extends ScalarBound {
  *  that type's validator requires (or checks for before use), so they are typed as present. */
 interface EvalClause extends Clause {
   scope?: string;
-  // spend_limit (`window` is read only when `max_per_window` is set, which requires it)
+  // spend_limit (`window` is read only when `max_per_window` is set, which requires it; optional `action_types` is the
+  // shared field below: the money actions the clause covers by type)
   asset: string;
   max_per_action?: number;
   max_per_window?: number;
@@ -219,6 +220,9 @@ const ms = (isoTs: string | undefined): number => Date.parse(isoTs ?? "");
 const paramsOf = (r: Receipt): Record<string, unknown> => r.intent?.params ?? {};
 // `list.includes(value)` for a value of any type (an action's params are arbitrary JSON).
 const listHas = (list: readonly unknown[], value: unknown): boolean => list.includes(value);
+/** An asset name as spend limits compare it: width forms unified (NFKC), surrounding space dropped, upper case, so
+ *  `usdc` or `ＵＳＤＣ` is limited as `USDC`. Undefined for anything but a string, and empty for a blank one. */
+const assetKey = (asset: unknown): string | undefined => (typeof asset === "string" ? asset.normalize("NFKC").trim().toUpperCase() : undefined);
 // An action param value as an explanation shows it. Params are agent-supplied JSON: a template
 // literal threw on an object with its own "toString" key, which made violates() throw.
 const shown = jsonText;
@@ -517,7 +521,7 @@ export function violates(
   const actionCovered = ((policy.clauses ?? []) as EvalClause[]).some((clause) => {
     switch (clause.type) {
       case "action_allowlist": return listHas(clause.action_types, c.intent?.action_type);
-      case "spend_limit": return c.intent?.asset === clause.asset;
+      case "spend_limit": return clause.action_types !== undefined ? listHas(clause.action_types, c.intent?.action_type) : assetKey(c.intent?.asset) === assetKey(clause.asset);
       case "rate_limit":
       case "require_approval": return listHas(clause.action_types, c.intent?.action_type);
       case "sequence": return listHas(clause.first_action_types, c.intent?.action_type) || listHas(clause.then_action_types, c.intent?.action_type);
@@ -541,16 +545,37 @@ export function violates(
     });
   }
 
+  const spendClauses = ((policy.clauses ?? []) as EvalClause[]).filter((clause) => clause.type === "spend_limit");
   clauses: for (const clause of (policy.clauses ?? []) as EvalClause[]) {
     const t = clause.type;
 
     if (t === "spend_limit") {
       const asset = clause.asset;
-      if (c.intent?.asset === asset && !Number.isSafeInteger(c.intent?.amount)) {
+      const key = assetKey(asset);
+      const intentKey = assetKey(c.intent?.asset);
+      // A clause with `action_types` covers its money actions by type: such an action must name an asset this policy
+      // limits for that type, and an amount. Without them, a clause covers the actions in its asset (compared case- and
+      // width-insensitively), and an amount without any asset cannot be checked, so it is refused.
+      const byType = clause.action_types !== undefined;
+      const typed = byType && listHas(clause.action_types, c.intent?.action_type);
+      if (typed && !intentKey) {
+        record(clause, `a ${c.intent?.action_type} action must name its asset`, "asset:type");
+        continue;
+      }
+      if (typed && intentKey !== key && !spendClauses.some((o) => o.action_types !== undefined && listHas(o.action_types, c.intent?.action_type) && assetKey(o.asset) === intentKey)) {
+        record(clause, `asset ${c.intent?.asset} is not one this policy limits for ${c.intent?.action_type}`, "asset:asset");
+        continue;
+      }
+      if (!byType && !intentKey && c.intent?.amount !== undefined) {
+        record(clause, "an amount without an asset cannot be checked against a spend limit", "asset:type");
+        continue;
+      }
+      const applies = intentKey === key && (!byType || typed);
+      if (applies && !Number.isSafeInteger(c.intent?.amount)) {
         record(clause, `amount for asset ${asset} must be a nonnegative safe integer`, "amount:type");
         continue;
       }
-      const amt = c.intent?.asset === asset ? (c.intent?.amount ?? 0) : 0;
+      const amt = applies ? (c.intent?.amount ?? 0) : 0;
       if (clause.max_per_action != null && amt > clause.max_per_action) {
         record(clause, `per-action ${amt} exceeds max_per_action ${clause.max_per_action}`, "amount:max_per_action");
         continue;
@@ -558,7 +583,8 @@ export function violates(
       if (clause.max_per_window != null) {
         if (clause.scope === "global" && opts.gatewaysComplete === false) { undetermined = clause.id; continue; }
         const w = durationToMs(clause.window);
-        const relevant = executedUnique.filter((r) => r.intent?.asset === asset && inWindow(r, w));
+        const relevant = executedUnique.filter((r) => assetKey(r.intent?.asset) === key
+          && (!byType || listHas(clause.action_types, r.intent?.action_type)) && inWindow(r, w));
         if (relevant.some((r) => !Number.isSafeInteger(r.intent?.amount))) {
           record(clause, `window for asset ${asset} contains an invalid amount`, "amount:type");
           continue;

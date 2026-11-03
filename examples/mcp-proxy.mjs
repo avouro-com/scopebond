@@ -13,10 +13,12 @@ const attesterKeyPem = generateKeyPairSync("ed25519").privateKey.export({ type: 
 // get_, search_, describe_, view_) on the named server and denies every other tool.
 const policy = starterMcpPolicy("filesystem");
 
-// A stub upstream that records the last tool it was asked to run.
+// A stub upstream that lists its tools and records the last tool it was asked to run. The proxy forwards a call
+// only under a name that is exactly one of the upstream's listed tools.
 let lastForwardedTool = null;
 const upstream = {
   async call(message) {
+    if (message?.method === "tools/list") return { jsonrpc: "2.0", id: message.id ?? null, result: { tools: [{ name: "read_file" }, { name: "delete_file" }] } };
     lastForwardedTool = message?.params?.name ?? message?.method;
     return { jsonrpc: "2.0", id: message.id ?? null, result: { content: [{ type: "text", text: `ran ${lastForwardedTool}` }] } };
   },

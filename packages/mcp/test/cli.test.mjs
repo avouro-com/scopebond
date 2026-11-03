@@ -11,14 +11,15 @@ import { createInterface } from "node:readline";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 
-// A minimal upstream MCP server: echo a result for any request that has an id.
+// A minimal upstream MCP server: echo a result for any request that has an id, and list the one tool it has.
 const UPSTREAM = `
 import { createInterface } from "node:readline";
 createInterface({ input: process.stdin }).on("line", (line) => {
   if (!line.trim()) return;
   let m; try { m = JSON.parse(line); } catch { return; }
   if (m.id !== undefined && m.id !== null) {
-    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { upstream: m.method, name: m.params && m.params.name } }) + "\\n");
+    const tools = m.method === "tools/list" ? { tools: [{ name: "read_file" }] } : {};
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { upstream: m.method, name: m.params && m.params.name, ...tools } }) + "\\n");
   }
 });
 `;
