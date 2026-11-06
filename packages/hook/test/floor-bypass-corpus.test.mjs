@@ -83,6 +83,43 @@ if (linkMade) cases.push(
   { id: "symlink-read-from-scopebond", tool: "Read", input: { file_path: join(REPO, "link", "agent.key") } },
 );
 
+// 7. a `..` between the parts of a protected name: the path as written matches no pattern, the path it names does.
+mkdirSync(join(HOME, ".claude", "projects"), { recursive: true });
+mkdirSync(join(REPO, ".git", "refs"), { recursive: true });
+mkdirSync(join(REPO, ".git", "hooks"), { recursive: true });
+cases.push(
+  { id: "dotdot-write-claude-settings", tool: "Write", input: { file_path: `${HOME}/.claude/projects/../settings.json`, content: "{}" } },
+  { id: "dotdot-write-git-hook", tool: "Write", input: { file_path: `${REPO}/.git/refs/../hooks/pre-commit`, content: "#!/bin/sh" } },
+  { id: "dotdot-write-git-config-relative", tool: "Write", input: { file_path: ".git/refs/../config", content: "[core]" } },
+  { id: "dotdot-edit-codex-hooks", tool: "Edit", input: { file_path: `${HOME}/.codex/sessions/../hooks.json`, old_string: "a", new_string: "b" } },
+  { id: "dotdot-write-fish-config", tool: "Write", input: { file_path: `${HOME}/.config/fish/functions/../config.fish`, content: "" } },
+  { id: "dotdot-shell-redirect-claude-settings", command: `echo {} > ${HOME}/.claude/projects/../settings.json` },
+  { id: "dotdot-shell-redirect-git-hook", command: "echo x > .git/refs/../hooks/pre-commit" },
+  { id: "write-home-gitconfig", tool: "Write", input: { file_path: `${HOME}/.gitconfig`, content: "[core]\n\thooksPath = /tmp/h" } },
+);
+
+// 8. a link into .git: the write lands in git's hooks.
+let gitLinkMade = false;
+try { symlinkSync(join(REPO, ".git"), join(REPO, "g"), process.platform === "win32" ? "junction" : "dir"); gitLinkMade = true; } catch { /* no privilege */ }
+if (gitLinkMade) cases.push(
+  { id: "symlink-write-into-git-hooks", tool: "Write", input: { file_path: join(REPO, "g", "hooks", "pre-commit"), content: "#!/bin/sh" } },
+  { id: "symlink-write-git-config", tool: "Write", input: { file_path: join(REPO, "g", "config"), content: "[core]" } },
+);
+
+// 9. code decoded on the command line and run: what it changes cannot be read, so the floor refuses it.
+const b64 = (s) => Buffer.from(s, "utf8").toString("base64");
+const hex = (s) => Buffer.from(s, "utf8").toString("hex");
+cases.push(
+  { id: "base64-into-sh", command: `echo ${b64("echo {} > ~/.claude/settings.json")} | base64 -d | sh` },
+  { id: "base64-decode-into-env-bash", command: `echo ${b64("rm -rf ~/.scopebond")} | base64 --decode | env bash` },
+  { id: "xxd-into-python", command: `printf ${hex("import os")} | xxd -r -p | python3` },
+  { id: "eval-of-decoded-substitution", command: `eval "$(echo ${b64("echo {} > ~/.claude/settings.json")} | base64 -d)"` },
+  { id: "bash-c-decoded-substitution", command: `bash -c "$(base64 -d <<< ${b64("true")})"` },
+  { id: "source-decoded-process-substitution", command: "source <(base64 -d payload.b64)" },
+  { id: "python-exec-fromhex", command: `python3 -c 'exec(bytes.fromhex("${hex("open(\"x\",\"w\")")}"))'` },
+  { id: "node-eval-base64", command: `node -e "eval(Buffer.from('${b64("1")}','base64').toString())"` },
+);
+
 const seen = new Set();
 for (const c of cases) {
   test(`floor denies: ${c.id}`, async () => {
@@ -113,3 +150,18 @@ test("a policy file with the floor removed still enforces the floor", async () =
     assert.equal(read.clauseId, "protect-scopebond-read");
   } finally { r.close(); rmSync(stripped, { recursive: true, force: true, maxRetries: 5 }); }
 });
+
+// What the cases above must not catch: everyday commands and paths an agent uses.
+for (const [id, tool, input] of [
+  ["eval-fnm-env", "Bash", { command: 'eval "$(fnm env)"' }],
+  ["base64-decode-to-file", "Bash", { command: "base64 -d in.b64 > out.bin" }],
+  ["base64-decode-to-grep", "Bash", { command: "echo aGk= | base64 -d | grep hi" }],
+  ["python-print", "Bash", { command: 'python3 -c "import base64; print(base64.b64decode(\'aGk=\'))"' }],
+  ["ls-parent", "Bash", { command: "ls ../" }],
+  ["write-through-dotdot-ordinary", "Write", { file_path: `${REPO}/src/../README.md`, content: "x" }],
+]) {
+  test(`floor allows: ${id}`, async () => {
+    const d = await rt.evaluate(mapClaudeToolUse({ cwd: REPO, tool_name: tool, tool_input: input }));
+    assert.equal(d.decision, "allow", `${id} should be allowed (was ${d.decision}, ${d.clauseId ?? ""})`);
+  });
+}
