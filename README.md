@@ -16,6 +16,10 @@ requests. It also checks MCP tool calls and tools inside agent frameworks. Runs 
 Windows, macOS and Linux. The engine is open source under Apache-2.0, and core
 protection is never behind a paid plan.
 
+> **Early access.** Tested by a person on Windows 11 with Claude Code. macOS, Linux,
+> Cursor, Codex and the GitHub Copilot CLI are in beta: covered by automated tests, not
+> yet checked by hand. Please [report what you find](https://github.com/avouro-com/scopebond/issues).
+
 [Try it locally](#try-it-locally-no-account) ·
 [Scopebond Cloud](#connect-to-scopebond-cloud) ·
 [Explore the sample workspace](https://cloud.scopebond.com/app/sample) ·

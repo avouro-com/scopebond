@@ -343,6 +343,20 @@ test("test subcommand shows the decision without recording a receipt", () => {
   assert.ok(!existsSync(join(dir, "receipts.db")), "test does not record a receipt");
 });
 
+test("test says what a rule in Monitor would block, and still allows it", () => {
+  const project = mkdtempSync(join(tmpdir(), "sb-hook-test-monitor-"));
+  const dir = join(project, ".scopebond");
+  const env = { ...process.env, SCOPEBOND_HOOK_DIR: dir };
+  execFileSync(process.execPath, [cli, "init", "--no-install", "--yes"], { encoding: "utf8", cwd: project, env });
+  const monitored = run(dir, ["test", "git push --force origin main"]);
+  assert.equal(monitored.status, 0, "Monitor never blocks");
+  assert.match(monitored.stdout, /→ allow\s+Monitor: would block \(rule "protect-branches"\)/);
+  assert.match(monitored.stdout, /switch it to Block with/);
+  const plain = run(dir, ["test", "ls"]);
+  assert.doesNotMatch(plain.stdout, /would block/);
+  assert.ok(!existsSync(join(dir, "receipts.db")), "test does not record a receipt");
+});
+
 test("starter policy: a fetch and an MCP call are observed (allowed), a bare git push on a feature branch is allowed", async () => {
   const project = mkdtempSync(join(tmpdir(), "sb-hook-starter-"));
   const dir = join(project, ".scopebond");
