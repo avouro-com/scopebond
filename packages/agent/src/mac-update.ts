@@ -1,6 +1,8 @@
 // Updates of the macOS package. The package installs for every user (/Library/Application Support/Scopebond/bin, which a
 // person's agent cannot write), so it carries a small updater that runs as root: the LaunchDaemon com.scopebond.updater starts
-// `scopebond-agent update-daemon` whenever a request appears in its requests folder.
+// `scopebond-agent update-daemon` whenever its requests folder is not empty (launchd's QueueDirectories, which also starts
+// it again after a run while anything is left there: a request that lands while it runs is never lost, as it could be
+// with WatchPaths, which drops a change made while the job runs and fires once when the job is loaded).
 //
 //   - A person's agent, told by its workspace that a newer signed build is recommended, asks for it: a file in the
 //     requests folder (writable by everyone, readable by root alone) that names a version and nothing else.
@@ -20,12 +22,13 @@
 //     package that was not installed counts as a failed update and is tried again later, as on Windows.
 //
 // A request can only ask for a release that is newer and signed: whoever writes one cannot name a file, an address or an
-// older version. Anything in the folder that is not a regular file (a directory, a link, a pipe) is skipped and logged,
-// never read and never a reason to stop: the folder is writable by everyone, and root alone can remove such things.
+// older version. Anything else in the folder (another name, a directory, a link, a pipe) is never read or followed and
+// never a reason to stop: it is removed, and logged, so the folder is empty after every run and launchd does not start
+// the updater again for it. The folder is writable by everyone, and root alone can remove such things.
 
 import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { LABEL, MAC_PACKAGE_PLIST } from "./autostart.js";
 import { fetchVerifiedInstaller, INSTALL_RESULT, MAC_PACKAGE_EXE, readUpdatePending, updatesDir, type InstallResult } from "./native-update.js";
@@ -150,30 +153,44 @@ export function readRequest(file: string): string | null {
 
 const REQUEST_NAME = /^-?\d+-[0-9a-f]{16}\.json$/;
 
-/** The versions people's agents asked for (each request file is removed as it is read; anything else in the folder is
- *  left). Only regular files count; anything else under a request's name (a directory, a link, a pipe) is skipped and
- *  logged, and nothing in the folder can make this throw. */
-export function takeRequests(folder: string, log: (line: string) => void = () => {}): string[] {
+/** The versions people's agents asked for. The folder is left empty, since launchd starts the updater again while anything
+ *  is in it: a request (a regular file under a request's name) is read and removed; anything else is removed without
+ *  being read or followed (a link goes itself, never what it names) and logged. A directory that is not empty is moved
+ *  whole into `strays` (root's own folder; renamed, so nothing in it is read, followed or removed), or, without `strays`,
+ *  left and logged. Nothing in the folder can make this throw. */
+export function takeRequests(folder: string, log: (line: string) => void = () => {}, strays?: string): string[] {
   const versions: string[] = [];
   let names: string[];
   try { names = readdirSync(folder); } catch { return versions; }
   for (const name of names) {
-    if (!REQUEST_NAME.test(name)) continue;
     const file = join(folder, name);
     try {
       const stat = lstatSync(file);
-      if (!stat.isFile()) { log(`skipped ${name} in the requests folder: not a regular file`); continue; }
-      try {
-        const text = readRequest(file);
-        const v = text === null ? undefined : (JSON.parse(text) as { version?: unknown }).version;
-        if (typeof v === "string" && /^\d+\.\d+\.\d+$/.test(v)) versions.push(v);
-      } catch { /* not a request (swapped for a link or a pipe since, unreadable, not JSON) */ }
-      rmSync(file, { force: true });
+      if (REQUEST_NAME.test(name) && stat.isFile()) {
+        try {
+          const text = readRequest(file);
+          const v = text === null ? undefined : (JSON.parse(text) as { version?: unknown }).version;
+          if (typeof v === "string" && /^\d+\.\d+\.\d+$/.test(v)) versions.push(v);
+        } catch { /* not a request (swapped for a link or a pipe since, unreadable, not JSON) */ }
+      } else log(`removed ${name} from the requests folder: ${stat.isFile() ? "not a request" : "not a regular file"}`);
+      removeEntry(file, stat.isDirectory(), name, strays);
     } catch (error) {
-      log(`skipped ${name} in the requests folder: ${(error as Error).message}`);
+      log(`left ${name} in the requests folder: ${(error as Error).message}`);
     }
   }
   return versions;
+}
+
+/** Remove one entry of the requests folder, never following it: a directory with rmdir, or moved into `strays` when it
+ *  is not empty; anything else with unlink (a directory swapped in since is then treated as one). */
+function removeEntry(file: string, directory: boolean, name: string, strays: string | undefined): void {
+  if (!directory) {
+    try { unlinkSync(file); return; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; }
+  }
+  try { rmdirSync(file); return; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; }
+  if (!strays) throw new Error("a folder that is not empty");
+  mkdirSync(strays, { recursive: true, mode: 0o700 });
+  renameSync(file, join(strays, `${name}-${randomBytes(8).toString("hex")}`));
 }
 
 /** The people signed in to this Mac (each one's loginwindow), as the package's scripts find them. */
@@ -258,7 +275,9 @@ export async function runMacUpdater(o: MacUpdaterOptions = {}): Promise<InstallR
   // Every version asked for that is newer than the one running, newest first, at most MAX_CANDIDATES of them. Anyone on the
   // Mac can write a request, so the newest one may name a release that does not exist ("99.0.0"): the updater goes down the
   // list until one is published and checks out, so a made-up version never stands in the way of a real one.
-  const candidates = [...new Set(takeRequests(paths.requests, log))].filter((v) => compareVersions(v, running) > 0)
+  mkdirSync(paths.work, { recursive: true, mode: 0o700 });
+  chmodSync(paths.work, 0o700);
+  const candidates = [...new Set(takeRequests(paths.requests, log, join(paths.work, "strays")))].filter((v) => compareVersions(v, running) > 0)
     .sort(compareVersions).reverse().slice(0, MAX_CANDIDATES);
   let asked = candidates[0];
   if (!asked) return null;
@@ -269,8 +288,6 @@ export async function runMacUpdater(o: MacUpdaterOptions = {}): Promise<InstallR
     return result;
   };
   if (!(o.autoUpdate ?? macAutoUpdate)()) return record(false, "updates are turned off for this Mac (AutoUpdate)", null);
-  mkdirSync(paths.work, { recursive: true, mode: 0o700 });
-  chmodSync(paths.work, 0o700);
   const check = o.check ?? macPackageSignature;
   const install = o.install ?? ((file: string) => spawnSync("/usr/sbin/installer", ["-pkg", file, "-target", "/"], { stdio: "inherit", timeout: 15 * 60_000 }).status);
   const health = o.health ?? ((version: string) => macAgentHealth(version));
