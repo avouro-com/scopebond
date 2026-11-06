@@ -12,8 +12,13 @@ installer package (`packages/native/build-pkg.mjs`). There it:
   (`com.scopebond.tray`); *Open at Login* in its menu turns that off or on for the person in launchd;
 - leaves starting the agent to the agent's own LaunchAgent (`com.scopebond.agent`): it supervises as on Windows, and
   ends a hung agent, but starts it through launchd (`launchctl kickstart`), never as a second process;
-- shows notifications in Notification Center (`osascript`): no buttons there, so the menu-bar icon opens the panel with
-  the block's *Unblock…* form or *Restart it*;
+- shows notifications in Notification Center as Scopebond.app itself (`tauri-plugin-notification`, under the bundle
+  identifier `com.scopebond.tray` from `tauri.macos.conf.json`; `osascript` only as a fallback): no buttons there, so the
+  menu-bar icon opens the panel with the block's *Unblock…* form or *Restart it*;
+- runs the agent from the package's root-owned folder (`/Library/Application Support/Scopebond/bin/scopebond-agent`;
+  `/usr/local/bin/scopebond-agent` is only a link for PATH);
+- opens *Get help…* with `/usr/bin/open`, and shows a hidden icon again when Scopebond is opened from Applications while
+  it runs;
 - copies the support report with `pbcopy` and shows About in a dialog.
 
 ## What a person sees

@@ -251,3 +251,13 @@ test("a quoted Windows Codex entry is rewritten in the plain form, keeping a sha
   assert.equal(group.hooks[1].timeout, 45, "Scopebond's own timeout is carried");
   assert.deepEqual(maintainHookEntries(["claude", "codex"], false, "win32"), [], "a second pass has nothing to report");
 });
+
+test("an entry whose Node a version manager removed is repaired, even while updates are held", () => {
+  // `fnm uninstall` took the Node the entry names; the hook script itself is still there.
+  const gone = join(root, "fnm", "node-versions", "v22.0.0", "installation", "bin", "node");
+  claudeSettings(`"${gone}" "${hookCliPath()}" claude`);
+  const changed = maintainHookEntries(["claude"], false);
+  assert.equal(changed.length, 1, JSON.stringify(changed));
+  assert.equal(changed[0].reason, "the hook command could not start");
+  assert.ok(!claudeCommand().includes(gone), `rewritten with a Node that exists: ${claudeCommand()}`);
+});

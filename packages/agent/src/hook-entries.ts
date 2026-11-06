@@ -9,14 +9,15 @@ import {
   type Harness,
 } from "@scopebond/hook";
 
-/** The programs a hook command names (an `.exe`, or a `.js` Node runs) that are not on disk. */
+/** The programs a hook command names (the program it starts, whatever its name, such as a Node a version manager
+ *  removed, or an `.exe` or a `.js` Node runs) that are not on disk. */
 export function missingPrograms(commands: string[], exists: (file: string) => boolean = existsSync): string[] {
   const missing = new Set<string>();
   for (const command of commands) {
-    for (const raw of command.match(/"[^"]+"|\S+/g) ?? []) {
+    (command.match(/"[^"]+"|\S+/g) ?? []).forEach((raw, i) => {
       const file = raw.replace(/^"|"$/g, "");
-      if (/\.(m|c)?js$|\.exe$/i.test(file) && /[\\/]/.test(file) && !exists(file)) missing.add(file);
-    }
+      if ((i === 0 || /\.(m|c)?js$|\.exe$/i.test(file)) && /[\\/]/.test(file) && !exists(file)) missing.add(file);
+    });
   }
   return [...missing];
 }

@@ -12,7 +12,7 @@ import {
   type CloudExporterOptions, type CloudOutbox, type CloudSequenceProofOptions, type ReceiptStore,
 } from "@scopebond/gateway";
 import { CHAIN_HEADS_FILE, SqliteCloudOutbox, chainHeadRecorder, ensurePrivateDir, loadOrCreateAttester } from "@scopebond/gateway/node";
-import { LOSSLESS_OUTBOX } from "./delivery-report.js";
+import { deliveryQueueLimits } from "./delivery-report.js";
 import { forgetCached, readTextCached } from "./config-cache.js";
 import { summaryOptions } from "./evidence-detail.js";
 import { replaceFile } from "./safe-fs.js";
@@ -188,10 +188,11 @@ export function exporterOptions(
     onChainHead: chainHeadRecorder(join(dirname(outboxDbPath), CHAIN_HEADS_FILE)) };
 }
 
-/** Open this computer's delivery queue with the settings the uploader keeps it with (lossless: nothing is dropped for space
- *  or age). Throws a DeliveryQueueError when it cannot be opened. */
+/** Open this computer's delivery queue with the settings the uploader keeps it with: nothing expires, and nothing queued is
+ *  dropped; past its size limit a new record is kept in the log and counted as a gap instead (deliveryQueueLimits). Throws a
+ *  DeliveryQueueError when it cannot be opened. */
 export function openDeliveryQueue(outboxDbPath: string, busyTimeoutMs?: number): SqliteCloudOutbox {
-  try { return new SqliteCloudOutbox(outboxDbPath, { ...LOSSLESS_OUTBOX, ...(busyTimeoutMs === undefined ? {} : { busyTimeoutMs }) }); }
+  try { return new SqliteCloudOutbox(outboxDbPath, { ...deliveryQueueLimits(), ...(busyTimeoutMs === undefined ? {} : { busyTimeoutMs }) }); }
   catch (error) { throw new DeliveryQueueError(outboxDbPath, error); }
 }
 
@@ -199,10 +200,11 @@ export function attachExporter(
   outboxDbPath: string, connection: HookConnection, store: ReceiptStore, fetchImpl?: typeof fetch,
   options: { busyTimeoutMs?: number; onGap?: (gap: CloudDeliveryGap) => void; backoff?: CloudBackoff | null } = {},
 ): { store: ReceiptStore; exporter: CloudExporter; outbox: SqliteCloudOutbox } {
-  // Lossless: no cap and no expiry. A record leaves the queue only when the workspace
-  // accepts it, or when a key change makes it undeliverable (`recover` then sends it). The
-  // gateway's defaults (10,000 records, 64 MiB, 7 days) dropped the newest records once a long
-  // outage filled the queue.
+  // No count limit and no expiry: a record leaves the queue only when the workspace accepts it, or when a key change makes it
+  // undeliverable (`recover` then sends it). The gateway's defaults (10,000 records, 64 MiB, 7 days) dropped the newest
+  // records once a long outage filled the queue. Only a size limit far above that (512 MiB, deliveryQueueLimits) keeps a
+  // queue that never drains from filling the disk; a record past it stays in the log, is counted as a `capacity` gap the
+  // workspace hears of, and status and doctor say the queue is full.
   const outbox = openDeliveryQueue(outboxDbPath, options.busyTimeoutMs);
   const exporter = createCloudExporter(exporterOptions(outboxDbPath, connection, outbox, fetchImpl, options));
   return { store: withCloudExporter(store, exporter), exporter, outbox };

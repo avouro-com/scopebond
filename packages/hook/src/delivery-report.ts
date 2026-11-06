@@ -12,35 +12,68 @@ import { readSignatureState } from "./policy-signature.js";
 import { grantsExpired, grantsValidUntil } from "./policy-freshness.js";
 import { signatureModeAt } from "./policy-next-key.js";
 import { readMeta } from "./managed.js";
+import { setting } from "./env-trust.js";
 
 export const OUTBOX_FILE = "receipts.db.cloud-outbox.db";
 
-/** The queue opened without limits, so reading it never expires or drops anything. */
+/** The queue opened without any limit, so reading it (or putting records back into it) never expires or drops anything. */
 export const LOSSLESS_OUTBOX = { maxPending: Number.MAX_SAFE_INTEGER, maxBytes: Number.MAX_SAFE_INTEGER, maxAgeMs: Number.MAX_SAFE_INTEGER } as const;
+
+/** The most the delivery queue holds before it stops taking new records (`SCOPEBOND_OUTBOX_MAX_MB` changes it): 512 MiB,
+ *  months of records for one computer, so only a workspace that has not accepted anything for a very long time reaches
+ *  it. It only keeps a queue that never drains from filling the disk. */
+export const OUTBOX_MAX_BYTES = 512 * 1024 * 1024;
+/** The queue counts as nearly full from this share of its limit (status and doctor warn). */
+const NEARLY_FULL = 0.9;
+
+/** The queue's size limit on this computer, in bytes. */
+export function outboxMaxBytes(): number {
+  const mb = Number(setting("SCOPEBOND_OUTBOX_MAX_MB"));
+  return Number.isInteger(mb) && mb > 0 ? mb * 1024 * 1024 : OUTBOX_MAX_BYTES;
+}
+
+/** The limits the hook writes to the queue with: no count limit and no expiry (a record leaves only when the workspace
+ *  accepts it, or a key change makes it undeliverable and `recover` sends it), and a size limit. A record that comes when
+ *  the queue is full is not dropped: its receipt is already in this computer's log, the queue still gives it its number
+ *  and keeps it as a `capacity` gap, so the workspace sees the hole and hears the count with the next rules check, and
+ *  `status` and `doctor` say the queue is full and what to do. */
+export function deliveryQueueLimits(): { maxPending: number; maxBytes: number; maxAgeMs: number } {
+  return { maxPending: Number.MAX_SAFE_INTEGER, maxBytes: outboxMaxBytes(), maxAgeMs: Number.MAX_SAFE_INTEGER };
+}
 
 /** How many records wait to send and since when, read without changing the queue. */
 export function queueStatus(dir: string): {
   pending: number; oldest: number | null; queueId?: string; seqAssigned?: number; error?: string;
   /** Records that left the queue without being delivered as queued, over the queue's lifetime, and their counts by reason. */
   gapsTotal: number; gapsByReason: Record<string, number>;
+  /** The size of the records waiting, in bytes. */
+  bytes: number;
 } {
   const outboxPath = join(dir, OUTBOX_FILE);
-  if (!existsSync(outboxPath)) return { pending: 0, oldest: null, gapsTotal: 0, gapsByReason: {} };
+  if (!existsSync(outboxPath)) return { pending: 0, oldest: null, gapsTotal: 0, gapsByReason: {}, bytes: 0 };
   try {
     const outbox = new SqliteCloudOutbox(outboxPath, LOSSLESS_OUTBOX);
     try {
       const status = outbox.status();
       return {
         pending: status.pending, oldest: status.oldestEnqueuedAt, ...(status.queueId ? { queueId: status.queueId, seqAssigned: status.seqAssigned ?? 0 } : {}),
-        gapsTotal: status.gaps, gapsByReason: status.gapsByReason ?? {},
+        gapsTotal: status.gaps, gapsByReason: status.gapsByReason ?? {}, bytes: status.pendingBytes ?? 0,
       };
     } finally { outbox.close(); }
   } catch (error) {
     // Not "nothing waiting": the queue cannot be opened. Actions stay allowed and are recorded on this computer; each record
     // written meanwhile is noted and queued once the queue can be written again.
-    return { pending: 0, oldest: null, error: `${outboxPath}: ${(error as Error).message}`, gapsTotal: 0, gapsByReason: {} };
+    return { pending: 0, oldest: null, error: `${outboxPath}: ${(error as Error).message}`, gapsTotal: 0, gapsByReason: {}, bytes: 0 };
   }
 }
+
+/** Whether the queue is full (new records are kept in the log but not queued), nearly full, or neither. */
+export function queueFullness(bytes: number, max: number = outboxMaxBytes()): "full" | "nearly_full" | null {
+  if (bytes >= max) return "full";
+  return bytes >= max * NEARLY_FULL ? "nearly_full" : null;
+}
+
+const mib = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
 
 /** "rejected 2, outbox_error 1": the counts by reason, largest first. */
 function gapReasons(byReason: Record<string, number>): string {
@@ -110,8 +143,22 @@ export function describeDelivery(dir: string, connection: Pick<HookConnection, "
   const state = readDeliveryState(dir);
   const lines: string[] = [];
   const problems: string[] = [];
-  const { pending, oldest, error: queueError, gapsTotal, gapsByReason } = queueStatus(dir);
+  const { pending, oldest, error: queueError, gapsTotal, gapsByReason, bytes } = queueStatus(dir);
   let fix: string | null = null;
+  // A full queue keeps every receipt in this computer's log, but stops queueing new ones for the workspace: said first.
+  const fullness = queueError ? null : queueFullness(bytes);
+  if (fullness) {
+    const max = outboxMaxBytes();
+    const capacity = gapsByReason.capacity ?? 0;
+    const what = fullness === "full"
+      ? `DELIVERY QUEUE FULL: ${pending} record(s), ${mib(bytes)} of its ${mib(max)} limit, wait to send. New records are kept in this computer's log but not queued${capacity ? ` (${capacity} so far)` : ""}; the workspace is told how many.`
+      : `DELIVERY QUEUE NEARLY FULL: ${pending} record(s), ${mib(bytes)} of its ${mib(max)} limit, wait to send.`;
+    lines.unshift(what);
+    lines.push(`fix: get delivery working again (${cliCommand("flush")} shows what the workspace answers); the queue sends and empties itself. Do not delete it. SCOPEBOND_OUTBOX_MAX_MB raises the limit`);
+    problems.push(fullness === "full"
+      ? `the delivery queue is full (${mib(bytes)} of ${mib(max)}): new records are kept in this computer's log but no longer queued for the workspace; get delivery working again (${cliCommand("flush")})`
+      : `the delivery queue is nearly full (${mib(bytes)} of ${mib(max)}): records have not reached the workspace for a long time; get delivery working again (${cliCommand("flush")})`);
+  }
   if (queueError) {
     lines.push(`DELIVERY QUEUE UNUSABLE: ${queueError}`);
     lines.push("actions stay allowed and are recorded on this computer; they are sent once the queue can be written again");

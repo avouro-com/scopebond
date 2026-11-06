@@ -12,7 +12,10 @@
 // release workflow then notarizes and staples the signed package.
 //
 // The package installs, for every user of the Mac:
-//   /usr/local/bin/scopebond-agent                          the agent and the hook (on PATH in every new terminal)
+//   /Library/Application Support/Scopebond/bin/scopebond-agent
+//                                                            the agent and the hook, in a folder only root can change:
+//                                                            the LaunchAgent, the hook entries and the menu-bar app run it
+//   /usr/local/bin/scopebond-agent                          a link to it (postinstall), for PATH in a new terminal only
 //   /Library/LaunchAgents/com.scopebond.agent.plist          starts `scopebond-agent run` as each person who signs in
 //   /Library/LaunchDaemons/com.scopebond.updater.plist       the updater, as root: installs the next signed package
 //                                                            when a person's agent asks (`scopebond-agent update-daemon`)
@@ -34,9 +37,11 @@ const macos = join(here, "macos");
 export const PACKAGE_ID = "com.scopebond.agent";
 /** Where each file goes on the Mac, and the file it comes from (null: the executable given). */
 export const PAYLOAD = [
-  { path: "usr/local/bin/scopebond-agent", from: null, mode: 0o755 },
-  // The root updater's own copy of the executable, in a folder only root can write: the LaunchDaemon runs this one, never
-  // the copy in /usr/local/bin, which a person may own on a Mac where another tool took over /usr/local.
+  // The executable everything the package starts runs, in a folder only root can write. /usr/local/bin, where it was
+  // before, can belong to a person (Homebrew on Intel takes /usr/local over), who could then replace what everyone runs:
+  // the postinstall leaves only a link there, for PATH.
+  { path: "Library/Application Support/Scopebond/bin/scopebond-agent", from: null, mode: 0o755 },
+  // The root updater's own copy of the executable, in a folder only root can write: the LaunchDaemon runs this one.
   { path: "Library/PrivilegedHelperTools/com.scopebond.updater", from: null, mode: 0o755 },
   { path: "Library/LaunchAgents/com.scopebond.agent.plist", from: join(macos, "com.scopebond.agent.plist"), mode: 0o644 },
   { path: "Library/LaunchDaemons/com.scopebond.updater.plist", from: join(macos, "com.scopebond.updater.plist"), mode: 0o644 },

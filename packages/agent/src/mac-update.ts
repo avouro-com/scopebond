@@ -1,5 +1,5 @@
-// Updates of the macOS package. The package installs for every user (/usr/local/bin, which a person's agent cannot
-// write), so it carries a small updater that runs as root: the LaunchDaemon com.scopebond.updater starts
+// Updates of the macOS package. The package installs for every user (/Library/Application Support/Scopebond/bin, which a
+// person's agent cannot write), so it carries a small updater that runs as root: the LaunchDaemon com.scopebond.updater starts
 // `scopebond-agent update-daemon` whenever a request appears in its requests folder.
 //
 //   - A person's agent, told by its workspace that a newer signed build is recommended, asks for it: a file in the
@@ -11,17 +11,24 @@
 //     signed with an updater key built into this executable, the package's SHA-256 and size the manifest's, and the
 //     package signed with Avouro LLC's Developer ID Installer identity and notarized (pkgutil, spctl). Only then does it
 //     run `installer`; the package's postinstall starts the new agent for everyone signed in.
+//   - After `installer` it waits for the new agent to run (health below), as the Windows helper waits for the new agent to
+//     answer. When it does not, the update is recorded as failed and the release that ran before is installed again: the
+//     package kept from its own install (root's folder), else that release downloaded and checked as above. Whatever
+//     happens, every signed-in person's agent is started again afterwards, so a package that failed half way (the
+//     preinstall stopped the agents, the postinstall never ran) does not leave anyone without one.
 //   - It writes what happened where every agent reads it. An agent that asked compares it with its own request: a
 //     package that was not installed counts as a failed update and is tried again later, as on Windows.
 //
 // A request can only ask for a release that is newer and signed: whoever writes one cannot name a file, an address or an
-// older version.
+// older version. Anything in the folder that is not a regular file (a directory, a link, a pipe) is skipped and logged,
+// never read and never a reason to stop: the folder is writable by everyone, and root alone can remove such things.
 
 import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fetchVerifiedInstaller, INSTALL_RESULT, readUpdatePending, updatesDir, type InstallResult } from "./native-update.js";
+import { LABEL, MAC_PACKAGE_PLIST } from "./autostart.js";
+import { fetchVerifiedInstaller, INSTALL_RESULT, MAC_PACKAGE_EXE, readUpdatePending, updatesDir, type InstallResult } from "./native-update.js";
 import { MAC_SETTINGS_DOMAINS, readInstallerSetting, type RegistryReader } from "./signin.js";
 import { agentVersion, compareVersions } from "./update.js";
 
@@ -119,6 +126,11 @@ export interface MacUpdaterOptions {
   publicKey?: Parameters<typeof fetchVerifiedInstaller>[1]["publicKey"];
   now?: () => number;
   log?: (line: string) => void;
+  /** After `installer`: null when `version` is installed and every signed-in person's agent runs it, else why not
+   *  (default: macAgentHealth). */
+  health?: (version: string) => Promise<string | null>;
+  /** Start every signed-in person's agent (and menu-bar app) again (default: launchctl, as the postinstall does). */
+  startAgain?: () => void;
 }
 
 /** A request file's text, or null: opened without following a link and without waiting on a pipe or device, and read only
@@ -136,31 +148,111 @@ export function readRequest(file: string): string | null {
   }
 }
 
-/** The versions people's agents asked for (the files are removed as they are read; anything else in the folder is left). */
-function takeRequests(folder: string): string[] {
+const REQUEST_NAME = /^-?\d+-[0-9a-f]{16}\.json$/;
+
+/** The versions people's agents asked for (each request file is removed as it is read; anything else in the folder is
+ *  left). Only regular files count; anything else under a request's name (a directory, a link, a pipe) is skipped and
+ *  logged, and nothing in the folder can make this throw. */
+export function takeRequests(folder: string, log: (line: string) => void = () => {}): string[] {
   const versions: string[] = [];
   let names: string[];
   try { names = readdirSync(folder); } catch { return versions; }
-  for (const name of names.filter((n) => /^-?\d+-[0-9a-f]{16}\.json$/.test(n))) {
+  for (const name of names) {
+    if (!REQUEST_NAME.test(name)) continue;
     const file = join(folder, name);
     try {
-      const text = readRequest(file);
-      const v = text === null ? undefined : (JSON.parse(text) as { version?: unknown }).version;
-      if (typeof v === "string" && /^\d+\.\d+\.\d+$/.test(v)) versions.push(v);
-    } catch { /* not a request (a link, a pipe, unreadable) */ }
-    rmSync(file, { force: true });
+      const stat = lstatSync(file);
+      if (!stat.isFile()) { log(`skipped ${name} in the requests folder: not a regular file`); continue; }
+      try {
+        const text = readRequest(file);
+        const v = text === null ? undefined : (JSON.parse(text) as { version?: unknown }).version;
+        if (typeof v === "string" && /^\d+\.\d+\.\d+$/.test(v)) versions.push(v);
+      } catch { /* not a request (swapped for a link or a pipe since, unreadable, not JSON) */ }
+      rmSync(file, { force: true });
+    } catch (error) {
+      log(`skipped ${name} in the requests folder: ${(error as Error).message}`);
+    }
   }
   return versions;
 }
 
-/** One run of the updater (as root): take the requests, install the newest signed release asked for, record the result.
- *  Returns the result it recorded, or null when there was nothing to do. */
+/** The people signed in to this Mac (each one's loginwindow), as the package's scripts find them. */
+export function signedInUids(): number[] {
+  const ps = spawnSync("/bin/ps", ["-axo", "uid=,comm="], { encoding: "utf8", timeout: 10_000 });
+  const uids = new Set<number>();
+  for (const line of (ps.stdout ?? "").split("\n")) {
+    const m = /^\s*(\d+)\s+(.*\/loginwindow)\s*$/.exec(line);
+    if (m && m[1] !== "0") uids.add(Number(m[1]));
+  }
+  return [...uids];
+}
+
+const launchctl = (args: string[]) => spawnSync("/bin/launchctl", args, { encoding: "utf8", timeout: 10_000 });
+const agentDisabled = (uid: number) => /"com\.scopebond\.agent"\s*=>\s*(?:disabled|true)/.test(launchctl(["print-disabled", `gui/${uid}`]).stdout ?? ""); // LABEL
+
+/** Start the agent (and the menu-bar app, when installed) for every person signed in, as the postinstall does: a person
+ *  for whom launchd has it turned off stays without it. Already running is left running. */
+export function startAgentsAgain(uids: number[] = signedInUids()): void {
+  const tray = "/Library/LaunchAgents/com.scopebond.tray.plist";
+  for (const uid of uids) {
+    if (!agentDisabled(uid)) {
+      launchctl(["bootstrap", `gui/${uid}`, MAC_PACKAGE_PLIST]);
+      launchctl(["kickstart", `gui/${uid}/${LABEL}`]);
+    }
+    if (existsSync(tray)) launchctl(["bootstrap", `gui/${uid}`, tray]);
+  }
+}
+
+/** The pid launchd runs the agent as for `uid`, or null when it is not running. */
+function agentPid(uid: number): number | null {
+  const out = launchctl(["print", `gui/${uid}/${LABEL}`]).stdout ?? "";
+  const pid = /^\s*pid = (\d+)\s*$/m.exec(out)?.[1];
+  return /^\s*state = running\s*$/m.test(out) && pid ? Number(pid) : null;
+}
+
+/** Whether `version` is installed and running: the installed executable says it is that version, and every signed-in
+ *  person whose agent is not turned off has it running under the same process for at least `steadyMs` (a crash restarts
+ *  it after 30 seconds under a new process, so a new agent that keeps failing never counts). Root cannot ask a person's
+ *  agent over its own channel (it is that person's), so launchd's view of it is what is checked. Null when healthy, else
+ *  why not, once `deadlineMs` has passed. */
+export async function macAgentHealth(version: string, o: { exe?: string; deadlineMs?: number; steadyMs?: number; uids?: () => number[]; pid?: (uid: number) => number | null; reports?: (exe: string) => string; sleep?: (ms: number) => Promise<void> } = {}): Promise<string | null> {
+  const exe = o.exe ?? MAC_PACKAGE_EXE;
+  const deadline = Date.now() + (o.deadlineMs ?? 3 * 60_000);
+  const steadyMs = o.steadyMs ?? 15_000;
+  const reports = o.reports ?? ((file: string) => spawnSync(file, ["--version"], { encoding: "utf8", timeout: 30_000 }).stdout ?? "");
+  const pidOf = o.pid ?? agentPid;
+  const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const seen = new Map<number, { pid: number; since: number }>();
+  let why: string;
+  for (;;) {
+    const said = reports(exe).trim();
+    if (!said.startsWith(`agent/${version} `)) why = `${exe} reports ${JSON.stringify(said.slice(0, 80) || "nothing")}, not agent/${version}`;
+    else {
+      const waiting: number[] = [];
+      for (const uid of (o.uids ?? (() => signedInUids().filter((u) => !agentDisabled(u))))()) {
+        const pid = pidOf(uid);
+        const before = seen.get(uid);
+        if (pid === null) { seen.delete(uid); waiting.push(uid); continue; }
+        if (!before || before.pid !== pid) { seen.set(uid, { pid, since: Date.now() }); waiting.push(uid); continue; }
+        if (Date.now() - before.since < steadyMs) waiting.push(uid);
+      }
+      if (!waiting.length) return null;
+      why = `the agent did not keep running for ${waiting.map((u) => `uid ${u}`).join(", ")}`;
+    }
+    if (Date.now() >= deadline) return why;
+    await sleep(5_000);
+  }
+}
+
+/** One run of the updater (as root): take the requests, install the newest signed release asked for, check that the new
+ *  agent runs (else install the one before again), record the result. Returns the result it recorded, or null when there
+ *  was nothing to do. */
 export async function runMacUpdater(o: MacUpdaterOptions = {}): Promise<InstallResult | null> {
   const paths = o.paths ?? MAC_UPDATER_PATHS;
   const log = o.log ?? ((line: string) => console.log(`${new Date().toISOString()} ${line}`));
   const now = o.now ?? Date.now;
   const running = o.running ?? agentVersion();
-  const asked = takeRequests(paths.requests).sort(compareVersions).at(-1);
+  const asked = takeRequests(paths.requests, log).sort(compareVersions).at(-1);
   if (!asked || compareVersions(asked, running) <= 0) return null;
   const record = (installed: boolean, reason: string | null, exitCode: number | null): InstallResult => {
     const result: InstallResult = { at: new Date(now()).toISOString(), version: asked, installed, reason, exit_code: exitCode, log: null };
@@ -171,19 +263,75 @@ export async function runMacUpdater(o: MacUpdaterOptions = {}): Promise<InstallR
   if (!(o.autoUpdate ?? macAutoUpdate)()) return record(false, "updates are turned off for this Mac (AutoUpdate)", null);
   mkdirSync(paths.work, { recursive: true, mode: 0o700 });
   chmodSync(paths.work, 0o700);
+  const check = o.check ?? macPackageSignature;
+  const install = o.install ?? ((file: string) => spawnSync("/usr/sbin/installer", ["-pkg", file, "-target", "/"], { stdio: "inherit", timeout: 15 * 60_000 }).status);
+  const health = o.health ?? ((version: string) => macAgentHealth(version));
+  const startAgain = o.startAgain ?? (() => startAgentsAgain());
   const verified = await fetchVerifiedInstaller(asked, {
-    dir: paths.work, name: macPackageName(asked), publisher: MAC_INSTALLER_PUBLISHER, check: o.check ?? macPackageSignature,
+    dir: paths.work, name: macPackageName(asked), publisher: MAC_INSTALLER_PUBLISHER, check,
     fetchImpl: o.fetchImpl, base: o.base, publicKey: o.publicKey, now: now(),
   });
   if (!verified.ok) return record(false, verified.reason, null);
+  // The package of the release that installed fine last time, kept for going back (root's own folder).
+  const kept = join(paths.work, "installed");
+  let keep = false;
   try {
     // The file installed is the file checked: it sits in root's own folder, and its digest is checked once more.
     const bytes = readFileSync(verified.path);
     if (bytes.length !== verified.size || createHash("sha256").update(bytes).digest("hex") !== verified.sha256) return record(false, "the package changed after it was checked", null);
-    const code = (o.install ?? ((file: string) => spawnSync("/usr/sbin/installer", ["-pkg", file, "-target", "/"], { stdio: "inherit", timeout: 15 * 60_000 }).status))(verified.path);
-    return code === 0 ? record(true, null, 0) : record(false, `installer exited with ${code}`, code);
+    const code = install(verified.path);
+    if (code !== 0) {
+      // A package that failed part way can have stopped every agent (preinstall) without starting them (postinstall).
+      startAgain();
+      return record(false, `installer exited with ${code}`, code);
+    }
+    const unhealthy = await health(asked);
+    if (unhealthy === null) {
+      keep = true;
+      return record(true, null, 0);
+    }
+    const why = `the Scopebond Agent ${asked} was installed but did not start: ${unhealthy}`;
+    const back = await reinstallPrevious(running, { kept, paths, check, install, health, startAgain, o, now: now() });
+    return record(false, `${why}; ${back}`, 0);
   } finally {
-    rmSync(verified.path, { force: true });
+    if (keep) {
+      try {
+        mkdirSync(kept, { recursive: true, mode: 0o700 });
+        for (const old of readdirSync(kept)) rmSync(join(kept, old), { force: true, recursive: true });
+        renameSync(verified.path, join(kept, macPackageName(asked)));
+      } catch { rmSync(verified.path, { force: true }); }
+    } else rmSync(verified.path, { force: true });
+  }
+}
+
+/** Install `previous` again after a release that did not start: the package kept from its own install, checked again, or
+ *  else that release downloaded and checked as any update is. What happened, for the recorded result. */
+async function reinstallPrevious(previous: string, d: {
+  kept: string; paths: MacUpdaterPaths; check: (file: string) => { valid: boolean; subject: string }; install: (file: string) => number | null;
+  health: (version: string) => Promise<string | null>; startAgain: () => void; o: MacUpdaterOptions; now: number;
+}): Promise<string> {
+  if (!/^\d+\.\d+\.\d+$/.test(previous) || previous === "0.0.0") { d.startAgain(); return "there is no earlier release to go back to"; }
+  let file: string | null = join(d.kept, macPackageName(previous));
+  let fetched = false;
+  if (!existsSync(file)) {
+    const got = await fetchVerifiedInstaller(previous, {
+      dir: d.paths.work, name: macPackageName(previous), publisher: MAC_INSTALLER_PUBLISHER, check: d.check,
+      fetchImpl: d.o.fetchImpl, base: d.o.base, publicKey: d.o.publicKey, now: d.now,
+    });
+    if (!got.ok) { d.startAgain(); return `going back to ${previous} did not work: ${got.reason}`; }
+    file = got.path;
+    fetched = true;
+  } else {
+    const signed = d.check(file);
+    if (!signed.valid || !MAC_INSTALLER_PUBLISHER.test(signed.subject)) { d.startAgain(); return `going back to ${previous} did not work: its kept package is no longer signed by Avouro LLC`; }
+  }
+  try {
+    const code = d.install(file);
+    if (code !== 0) { d.startAgain(); return `going back to ${previous} did not work: installer exited with ${code}`; }
+    const unhealthy = await d.health(previous);
+    return unhealthy === null ? `Scopebond went back to ${previous}` : `${previous} was installed again but did not start either: ${unhealthy}`;
+  } finally {
+    if (fetched) rmSync(file, { force: true });
   }
 }
 

@@ -28,12 +28,12 @@ import { writeOutputTo } from "./log-file.js";
 import { refreshAppsEntry, writeAppsEntry } from "./apps-entry.js";
 import { runUninstall } from "./uninstall.js";
 import { CLEANUP_COMMAND, runCleanupCommand, signedInCleanup, SIGNED_IN_FLAG } from "./allusers-cleanup.js";
-import { installKind, MAC_PACKAGE_EXE, UPDATE_HELPER_COMMAND } from "./native-update.js";
+import { installKind, MAC_MOVE_ENTRIES_COMMAND, MAC_PACKAGE_EXE, UPDATE_HELPER_COMMAND } from "./native-update.js";
 import { MAC_UPDATER_COMMAND, MAC_UPDATER_EXE, runMacUpdater } from "./mac-update.js";
 import { upkeepCommand } from "./upkeep.js";
 import { AGENT_VERSION, startService, takeOver } from "./service.js";
 import { agentProgram, npmProgram, setupCli } from "./commands.js";
-import { missingPrograms } from "./hook-entries.js";
+import { missingPrograms, useNativeHookEntries } from "./hook-entries.js";
 import { findNpmInstall, hasNpmInstall, npmRemovalCommand } from "./migrate.js";
 import { readRegistryValue, SETTINGS_KEYS } from "./signin.js";
 import { scrubNodeInjection } from "./child-env.js";
@@ -103,7 +103,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     }
     case MAC_UPDATER_COMMAND: {
       // Internal: the macOS package's updater (LaunchDaemon com.scopebond.updater) runs this as root (mac-update.ts), from
-      // its own copy in /Library/PrivilegedHelperTools: never the copy in /usr/local/bin, which a person may own.
+      // its own copy in /Library/PrivilegedHelperTools: never the agent's copy or the /usr/local/bin link to it.
       if (process.platform !== "darwin" || process.getuid?.() !== 0 || process.execPath !== MAC_UPDATER_EXE) {
         console.error(`${MAC_UPDATER_COMMAND} is run by the Scopebond package's updater itself`);
         process.exitCode = 1;
@@ -111,6 +111,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       }
       const result = await runMacUpdater();
       process.exitCode = result && !result.installed ? 1 : 0;
+      return;
+    }
+    case MAC_MOVE_ENTRIES_COMMAND: {
+      // Internal: the macOS package's postinstall runs this as each person whose hook entries name the package's earlier
+      // path (/usr/local/bin): they are moved to the executable in the root-owned folder, as the agent does when it starts.
+      if (process.platform !== "darwin" || process.execPath !== MAC_PACKAGE_EXE) {
+        console.error(`${MAC_MOVE_ENTRIES_COMMAND} is run by the Scopebond package itself`);
+        process.exitCode = 1;
+        return;
+      }
+      for (const change of useNativeHookEntries(expectedHarnesses(), MAC_PACKAGE_EXE, dir)) console.log(`${change.reason}: ${change.file}`);
       return;
     }
     case "version":

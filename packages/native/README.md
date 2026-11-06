@@ -130,8 +130,11 @@ Installer identity and timestamped; without it, it is unsigned, as the Windows b
 architecture of the Node that built the executable (the release builds one for Apple silicon and one for Intel), on
 macOS 11 or later. The package:
 
-- installs for every user of the Mac (an administrator's password): `/usr/local/bin/scopebond-agent`, on PATH in every
-  new terminal; the folders on the way keep the owner and mode they already have;
+- installs for every user of the Mac (an administrator's password): `/Library/Application Support/Scopebond/bin/scopebond-agent`,
+  in a folder only root can change, which the LaunchAgent, every hook entry and the menu-bar app run; a link to it at
+  `/usr/local/bin/scopebond-agent` puts it on PATH in every new terminal (nothing the package starts runs the link,
+  since `/usr/local` can belong to a person). Hook entries an earlier release pointed at `/usr/local/bin` are moved to
+  it. The folders on the way keep the owner and mode they already have;
 - with the menu-bar app (`SCOPEBOND_TRAY_APP`; the release always carries it), installs `/Applications/Scopebond.app`
   (`node build-pkg.mjs app <scopebond-tray>` builds it around the tray program: an app with no Dock icon, the release's
   version, the icon `icon.mjs` draws, signed ad hoc; the release signs it with the Developer ID) and its LaunchAgent
@@ -139,7 +142,10 @@ macOS 11 or later. The package:
 - adds the updater, the LaunchDaemon `/Library/LaunchDaemons/com.scopebond.updater.plist` (root): launchd starts
   `scopebond-agent update-daemon` when a person's agent leaves a request in `/Library/Application Support/Scopebond/update-requests`
   (writable by everyone, readable by root alone). It installs the newest signed, notarized release asked for, as the
-  agent README describes, and writes `update-result.json` beside it;
+  agent README describes, then waits for the new agent to run for everyone signed in; when it does not, it installs the
+  release before again (the package it kept from that install, or the release downloaded and checked again) and records
+  the update as failed. Every agent is started again afterwards, also when the package failed part way. Anything in the
+  folder that is not a request file is skipped and logged. It writes `update-result.json` beside it;
 - adds the LaunchAgent `/Library/LaunchAgents/com.scopebond.agent.plist`, which runs `scopebond-agent run` as each person
   who signs in, with the agent's log in their Scopebond folder; a crash restarts it after 30 seconds, a clean stop does
   not. Its label is the agent's own autostart label, so launchd never runs a second agent beside it;
@@ -149,11 +155,15 @@ macOS 11 or later. The package:
   `Workspace` preference of `com.scopebond.agent` (a configuration profile, `sudo defaults write
   /Library/Preferences/com.scopebond.agent Workspace https://…`, or the person's own), with `InstallKey` there connecting
   without a code; else to Scopebond Cloud (the approval page opens in the browser). `scopebond-agent setup
-  <workspace-url>` connects to another workspace;
+  <workspace-url>` connects to another workspace. Each person's agent reads `InstallKey` at its own first start, so it
+  stays readable by everyone on the Mac while it is set (on Windows, the `InstallKey` value the installer's `KEY` writes
+  likewise): remove it once everyone who needs it has connected (`sudo defaults delete
+  /Library/Preferences/com.scopebond.agent InstallKey`), and give install keys a short life in the workspace;
 - is removed with `sudo "/Library/Application Support/Scopebond/uninstall.sh"`: first `scopebond-agent uninstall` as the
   person removing it (the agent stopped, the hook taken out of the coding agents' settings and the workspace told; with
-  `--purge`, `uninstall --purge`, and the Scopebond folder goes too), then the agent stopped for everyone signed in, the
-  files and the package's receipt (`pkgutil --forget com.scopebond.agent`). It ends with a sentence naming the Scopebond
+  `--purge`, `uninstall --purge`, and the Scopebond folder goes too), then the same `uninstall` as every other person
+  whose coding agents' settings still run the package (their Scopebond folder stays), then the agent stopped for everyone
+  signed in, the files and the package's receipt (`pkgutil --forget com.scopebond.agent`). It ends with a sentence naming the Scopebond
   folder; a workspace that could not be told is said, with exit code 75, and the removal goes on.
 
 `test/pkg.test.mjs` checks the files it is made from everywhere. With `SCOPEBOND_PKG=1` on macOS it builds the package

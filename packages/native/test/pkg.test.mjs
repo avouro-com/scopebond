@@ -7,11 +7,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FIRST_SIGNIN_FILE, LABEL, MAC_PACKAGE_EXE, MAC_PACKAGE_UNINSTALL, MAC_UPDATER_COMMAND, MAC_UPDATER_EXE, MAC_UPDATER_LABEL, MAC_UPDATER_PATHS, MAC_UPDATER_PLIST } from "@scopebond/agent";
+import { FIRST_SIGNIN_FILE, LABEL, MAC_MOVE_ENTRIES_COMMAND, MAC_PACKAGE_EXE, MAC_PACKAGE_LINK, MAC_PACKAGE_UNINSTALL, MAC_UPDATER_COMMAND, MAC_UPDATER_EXE, MAC_UPDATER_LABEL, MAC_UPDATER_PATHS, MAC_UPDATER_PLIST } from "@scopebond/agent";
 import { buildSea } from "../build-sea.mjs";
 import { buildPkg, distributionXml, MIN_MACOS, PACKAGE_ID, PAYLOAD, TRAY_BUNDLE_ID, trayInfoPlist } from "../build-pkg.mjs";
 import { installerVersion } from "../version.mjs";
@@ -47,7 +47,7 @@ test("the package's files agree with the agent: its path, its autostart label an
   assert.equal(MAC_PACKAGE_UNINSTALL, `sudo "${UNINSTALL_PATH}"`);
   const plist = read("com.scopebond.agent.plist");
   assert.match(plist, new RegExp(`<key>Label</key><string>${literal(LABEL)}</string>`));
-  assert.ok(plist.includes(`exec ${MAC_PACKAGE_EXE} run</string>`), "it runs the installed executable's `run`");
+  assert.ok(plist.includes(`exec "${MAC_PACKAGE_EXE}" run</string>`), "it runs the installed executable's `run`");
   for (const script of [read("scripts", "preinstall"), read("scripts", "postinstall"), read("uninstall.sh")]) {
     assert.ok(script.startsWith("#!/bin/sh\n"));
     assert.ok(script.includes(`LABEL=${LABEL}\n`), "every script names the same label");
@@ -55,8 +55,32 @@ test("the package's files agree with the agent: its path, its autostart label an
   assert.match(read("scripts", "postinstall"), /launchctl bootstrap "gui\/\$uid" "\$PLIST"/);
   assert.match(read("scripts", "preinstall"), /launchctl bootout "gui\/\$uid\/\$LABEL"/);
   const uninstall = read("uninstall.sh");
-  assert.ok(uninstall.includes(`EXE=${MAC_PACKAGE_EXE}\n`) && uninstall.includes(`PACKAGE_ID=${PACKAGE_ID}\n`));
+  assert.ok(uninstall.includes(`EXE="${MAC_PACKAGE_EXE}"\n`) && uninstall.includes(`PACKAGE_ID=${PACKAGE_ID}\n`));
   assert.ok(uninstall.includes("SCOPEBOND_UNINSTALL_CALLER=macos-package"), "the script says the folder sentence itself");
+});
+
+test("the executable is in root's own folder; /usr/local/bin has only a link, and earlier hook entries are moved", () => {
+  assert.equal(MAC_PACKAGE_EXE, "/Library/Application Support/Scopebond/bin/scopebond-agent");
+  assert.equal(MAC_PACKAGE_LINK, "/usr/local/bin/scopebond-agent");
+  assert.ok(!PAYLOAD.some((f) => f.path.startsWith("usr/local")), "nothing the package runs is under /usr/local");
+  const postinstall = read("scripts", "postinstall");
+  assert.ok(postinstall.includes(`LINK=${MAC_PACKAGE_LINK}\n`));
+  assert.match(postinstall, /\/bin\/ln -sfh "\$EXE" "\$LINK"/);
+  assert.match(postinstall, /root_only \/ \/Library "\/Library\/Application Support" "\$SUPPORT" "\$BIN" "\$EXE"/, "the executable's folders are checked");
+  assert.ok(postinstall.includes(`"$EXE" ${MAC_MOVE_ENTRIES_COMMAND}`), "hook entries naming the link are moved, as each person");
+  assert.match(postinstall, /dscl \. -list \/Users NFSHomeDirectory 2>\/dev\/null \| while read -r person home; do/, "every person on the Mac, not only those signed in");
+  // The tray runs the root-owned executable.
+  const tray = readFileSync(join(here, "..", "..", "tray", "src", "mac.rs"), "utf8");
+  assert.ok(tray.includes(`"${MAC_PACKAGE_EXE}"`), "the menu-bar app runs the root-owned executable");
+});
+
+test("removal takes the hook out of every person's settings that still run the package, not only the person removing it", () => {
+  const uninstall = read("uninstall.sh");
+  assert.match(uninstall, /dscl \. -list \/Users NFSHomeDirectory 2>\/dev\/null \| while read -r other home; do/);
+  assert.match(uninstall, /\[ "\$other" != "\$person" \]/, "the person removing it is not done twice");
+  assert.match(uninstall, /grep -qsF scopebond-agent "\$home\/\.claude\/settings\.json" "\$home\/\.cursor\/hooks\.json" "\$home\/\.codex\/hooks\.json" "\$home\/\.copilot\/hooks\/scopebond\.json"/);
+  assert.match(uninstall, /sudo -H -u "\$other" \/usr\/bin\/env SCOPEBOND_UNINSTALL_CALLER=macos-package "\$EXE" uninstall/);
+  assert.match(uninstall, /\[ -x "\$EXE" \] \|\| EXE="\$LINK"/, "an install from before the root-owned folder is removed too");
 });
 
 test("the menu-bar app's Info.plist: its identifier, the release's version, no Dock icon", () => {
@@ -145,7 +169,7 @@ test("the package installs the executable, the LaunchAgent and the uninstall scr
     ["./Library/LaunchAgents/com.scopebond.agent.plist", "-rw-r--r--", "root", "wheel"],
     ["./Library/LaunchDaemons/com.scopebond.updater.plist", "-rw-r--r--", "root", "wheel"],
     ["./Library/PrivilegedHelperTools/com.scopebond.updater", "-rwxr-xr-x", "root", "wheel"],
-    ["./usr/local/bin/scopebond-agent", "-rwxr-xr-x", "root", "wheel"],
+    ["./Library/Application Support/Scopebond/bin/scopebond-agent", "-rwxr-xr-x", "root", "wheel"],
     ...(trayApp ? [
       ["./Applications/Scopebond.app/Contents/Info.plist", "-rw-r--r--", "root", "wheel"],
       ["./Applications/Scopebond.app/Contents/MacOS/scopebond-tray", "-rwxr-xr-x", "root", "wheel"],
@@ -157,7 +181,7 @@ test("the package installs the executable, the LaunchAgent and the uninstall scr
 
   // The payload's executable is the one given, still signed, and it runs.
   const payload = join(component, "Payload");
-  const installed = join(payload, "usr", "local", "bin", "scopebond-agent");
+  const installed = join(payload, ...MAC_PACKAGE_EXE.split("/").filter(Boolean));
   assert.equal(sha256(installed), sha256(exe));
   // The root updater's own copy, in a folder only root can write, is the same signed executable.
   assert.equal(sha256(join(payload, ...MAC_UPDATER_EXE.split("/").filter(Boolean))), sha256(exe));
@@ -174,7 +198,7 @@ test("the package installs the executable, the LaunchAgent and the uninstall scr
   const agent = JSON.parse(spawnSync("plutil", ["-convert", "json", "-o", "-", plist], { encoding: "utf8" }).stdout);
   assert.deepEqual(agent, {
     Label: LABEL,
-    ProgramArguments: ["/bin/sh", "-c", `SCOPEBOND_AGENT_LOG="\${SCOPEBOND_HOME:-$HOME/.scopebond}/agent.log" exec ${MAC_PACKAGE_EXE} run`],
+    ProgramArguments: ["/bin/sh", "-c", `SCOPEBOND_AGENT_LOG="\${SCOPEBOND_HOME:-$HOME/.scopebond}/agent.log" exec "${MAC_PACKAGE_EXE}" run`],
     RunAtLoad: true,
     KeepAlive: { SuccessfulExit: false },
     ThrottleInterval: 30,
@@ -261,6 +285,7 @@ test("the package installs for every user and starts the agent, upgrades over it
     }
     const version = spawnSync(MAC_PACKAGE_EXE, ["--version"], { encoding: "utf8" });
     assert.equal(version.status, 0, version.stderr);
+    assert.equal(readlinkSync(MAC_PACKAGE_LINK), MAC_PACKAGE_EXE, "on PATH through a link to the root-owned executable");
     assert.equal(spawnSync("pkgutil", ["--pkg-info", PACKAGE_ID], { encoding: "utf8" }).status, 0, "the receipt");
     // The updater: loaded as root, its requests folder writable by everyone and readable by root alone, its own folder
     // root's. A request this person leaves starts it; a release that does not exist is refused, and the result says so.

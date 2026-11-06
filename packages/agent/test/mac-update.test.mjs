@@ -8,7 +8,7 @@ import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 const {
   MAC_INSTALLER_PUBLISHER, MANIFEST_DOMAIN, failedUpdate, macAutoUpdate, macPackageName, noteUpdateOutcome, readMacUpdateResult, readUpdatePending,
@@ -79,7 +79,7 @@ test("the updater installs the newest signed release asked for, from the file it
   requestMacUpdate(NEW, 502, paths);
   writeFileSync(join(paths.requests, "notes.txt"), "not a request");
   const { done, install } = installs();
-  const result = await runMacUpdater({ paths, running: "1.0.0", autoUpdate: () => true, fetchImpl: r.fetchImpl, publicKey: k.pub, check: () => ({ valid: true, subject: AVOURO }), install, log: () => {} });
+  const result = await runMacUpdater({ paths, running: "1.0.0", autoUpdate: () => true, fetchImpl: r.fetchImpl, publicKey: k.pub, check: () => ({ valid: true, subject: AVOURO }), install, health: async () => null, startAgain: () => {}, log: () => {} });
   assert.equal(result?.installed, true, result?.reason ?? "");
   assert.equal(result.version, NEW, "the highest asked for");
   assert.deepEqual(done, [pkg], "installed exactly the package checked");
@@ -95,7 +95,7 @@ test("the updater installs nothing that is not newer, allowed, signed by the upd
     requestMacUpdate(over.version ?? NEW, 501, paths);
     const { done, install } = installs();
     const r = over.release ?? release(k);
-    const result = await runMacUpdater({ paths, running: "1.0.0", autoUpdate: () => true, fetchImpl: r.fetchImpl, publicKey: k.pub, check: () => ({ valid: true, subject: AVOURO }), install, log: () => {}, ...over.options });
+    const result = await runMacUpdater({ paths, running: "1.0.0", autoUpdate: () => true, fetchImpl: r.fetchImpl, publicKey: k.pub, check: () => ({ valid: true, subject: AVOURO }), install, health: async () => null, startAgain: () => {}, log: () => {}, ...over.options });
     return { result, done, calls: r.calls };
   };
   const same = await run({ options: { running: NEW } });
@@ -163,4 +163,110 @@ test("a request file is read only when it is itself a small regular file", async
   const plist = readFileSync(join(import.meta.dirname, "..", "..", "native", "macos", "com.scopebond.updater.plist"), "utf8");
   assert.ok(plist.replace(/\s+/g, "").includes(`<string>${MAC_UPDATER_EXE}</string><string>update-daemon</string>`), "the daemon runs the helper's update-daemon");
   assert.doesNotMatch(plist, /\/usr\/local\/bin/);
+});
+
+// The requests folder is writable by everyone: whatever is put there under a request's name (a directory, a
+// link, a pipe) is skipped and logged, never read, and never stops the root updater. Before, a directory named like a
+// request made it throw on every run, so no update ever installed again.
+test("a directory, a link or a pipe named like a request does not stop the updater", async () => {
+  const paths = updater();
+  const k = keys();
+  const r = release(k);
+  mkdirSync(join(paths.requests, "501-0123456789abcdef.json"));
+  if (process.platform !== "win32") {
+    spawnSync("mkfifo", [join(paths.requests, "502-0123456789abcdef.json")]);
+    try { symlinkSync("/etc/hosts", join(paths.requests, "503-0123456789abcdef.json")); } catch { /* no links here */ }
+  }
+  requestMacUpdate(NEW, 504, paths);
+  const lines = [];
+  const { done, install } = installs();
+  const result = await runMacUpdater({ paths, running: "1.0.0", autoUpdate: () => true, fetchImpl: r.fetchImpl, publicKey: k.pub, check: () => ({ valid: true, subject: AVOURO }), install, health: async () => null, startAgain: () => {}, log: (l) => lines.push(l) });
+  assert.equal(result?.installed, true, result?.reason ?? "");
+  assert.deepEqual(done, [pkg]);
+  assert.ok(lines.some((l) => /skipped 501-0123456789abcdef\.json .*not a regular file/.test(l)), lines.join("\n"));
+  // Run again: still nothing throws, and the directory is still only skipped.
+  assert.equal(await runMacUpdater({ paths, running: NEW, autoUpdate: () => true, log: () => {} }), null);
+});
+
+/** A release server with several versions. */
+function releases(k, versions) {
+  const parts = versions.map((v) => release(k, { version: v }));
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    for (const p of parts) { const res = await p.fetchImpl(url); if (res.ok) return res; }
+    return new Response("not found", { status: 404 });
+  };
+  return { fetchImpl, calls };
+}
+
+test("a new agent that does not start is rolled back to the package kept from the last install", async () => {
+  const paths = updater();
+  const k = keys();
+  const r = releases(k, ["9.9.8", NEW]);
+  const installed = [];
+  const install = (file) => { installed.push(basename(file)); return 0; };
+  const base = { paths, autoUpdate: () => true, fetchImpl: r.fetchImpl, publicKey: k.pub, check: () => ({ valid: true, subject: AVOURO }), install, startAgain: () => {}, log: () => {} };
+  // 9.9.8 installs and runs: its package is kept.
+  requestMacUpdate("9.9.8", 501, paths);
+  assert.equal((await runMacUpdater({ ...base, running: "1.0.0", health: async () => null })).installed, true);
+  assert.ok(existsSync(join(paths.work, "installed", macPackageName("9.9.8"))), "the package that worked is kept for going back");
+  // 9.9.9 installs but its agent does not run: 9.9.8 goes back on from the kept package (no download).
+  requestMacUpdate(NEW, 501, paths);
+  const downloads = r.calls.length;
+  const checked = [];
+  const result = await runMacUpdater({ ...base, running: "9.9.8", health: async (v) => { checked.push(v); return v === NEW ? "the agent did not keep running for uid 501" : null; } });
+  assert.equal(result.installed, false);
+  assert.match(result.reason, /9\.9\.9 was installed but did not start: the agent did not keep running for uid 501; Scopebond went back to 9\.9\.8/);
+  assert.deepEqual(installed, [macPackageName("9.9.8"), macPackageName(NEW), macPackageName("9.9.8")]);
+  assert.deepEqual(checked, [NEW, "9.9.8"]);
+  assert.ok(r.calls.slice(downloads).every((u) => u.includes(NEW)), "the kept package was used, not downloaded again");
+  assert.ok(existsSync(join(paths.work, "installed", macPackageName("9.9.8"))), "still kept");
+  assert.ok(!existsSync(join(paths.work, "installed", macPackageName(NEW))), "the one that failed is not kept");
+  assert.deepEqual(readMacUpdateResult(paths), { ...result, log: null }, "the failure is what every agent reads (the tray shows it)");
+});
+
+test("with no kept package the release before is downloaded and checked; when that fails too, the failure is recorded and the agents start", async () => {
+  const k = keys();
+  const go = async (versions) => {
+    const paths = updater();
+    const r = releases(k, versions);
+    const installed = [];
+    let started = 0;
+    requestMacUpdate(NEW, 501, paths);
+    const result = await runMacUpdater({ paths, running: "9.9.7", autoUpdate: () => true, fetchImpl: r.fetchImpl, publicKey: k.pub, check: () => ({ valid: true, subject: AVOURO }),
+      install: (file) => { installed.push(basename(file)); return 0; }, health: async (v) => (v === NEW ? "no answer" : null), startAgain: () => { started += 1; }, log: () => {} });
+    return { result, installed, started };
+  };
+  const fetched = await go(["9.9.7", NEW]);
+  assert.match(fetched.result.reason, /went back to 9\.9\.7/);
+  assert.deepEqual(fetched.installed, [macPackageName(NEW), macPackageName("9.9.7")]);
+  const none = await go([NEW]);
+  assert.equal(none.result.installed, false);
+  assert.match(none.result.reason, /going back to 9\.9\.7 did not work: the release has no signed manifest/);
+  assert.equal(none.started, 1, "every agent is started again");
+});
+
+test("a package that fails part way starts every agent again (its preinstall stopped them)", async () => {
+  const paths = updater();
+  const k = keys();
+  const r = release(k);
+  let started = 0;
+  requestMacUpdate(NEW, 501, paths);
+  const result = await runMacUpdater({ paths, running: "1.0.0", autoUpdate: () => true, fetchImpl: r.fetchImpl, publicKey: k.pub, check: () => ({ valid: true, subject: AVOURO }), install: () => 1, health: async () => null, startAgain: () => { started += 1; }, log: () => {} });
+  assert.equal(result.reason, "installer exited with 1");
+  assert.equal(started, 1);
+});
+
+test("health: the installed executable reports the version and each person's agent keeps the same process", async () => {
+  const { macAgentHealth } = await import("../dist/index.js");
+  const sleep = async () => {};
+  const steady = await macAgentHealth("9.9.9", { exe: "/x", reports: () => "agent/9.9.9 hook/1.0.0\n", uids: () => [501], pid: () => 42, steadyMs: 0, deadlineMs: 60_000, sleep });
+  assert.equal(steady, null);
+  let n = 0;
+  const crashing = await macAgentHealth("9.9.9", { exe: "/x", reports: () => "agent/9.9.9 hook/1.0.0", uids: () => [501], pid: () => ++n, steadyMs: 0, deadlineMs: 50, sleep: () => new Promise((r) => setTimeout(r, 10)) });
+  assert.match(crashing, /did not keep running for uid 501/);
+  const old = await macAgentHealth("9.9.9", { exe: "/x", reports: () => "agent/9.9.8 hook/1.0.0", uids: () => [], pid: () => 1, deadlineMs: 0, sleep });
+  assert.match(old, /reports "agent\/9\.9\.8 hook\/1\.0\.0", not agent\/9\.9\.9/);
+  assert.equal(await macAgentHealth("9.9.9", { exe: "/x", reports: () => "agent/9.9.9 hook/1.0.0", uids: () => [], deadlineMs: 0, sleep }), null, "nobody signed in: the program is enough");
 });

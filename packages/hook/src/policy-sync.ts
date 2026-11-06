@@ -28,7 +28,7 @@ import { connectionPath, loadConnection } from "./cloud.js";
 import { machineIdHeaders } from "@scopebond/gateway";
 import { machineIdFor } from "./machine-id.js";
 import { readDeliveryState, recordRulesCredential } from "./delivery-state.js";
-import { queueStatus } from "./delivery-report.js";
+import { queueFullness, queueStatus } from "./delivery-report.js";
 import { refreshIfDue } from "./credential-refresh.js";
 import { recommendedFrom } from "./client-health.js";
 import { retentionDaysFrom } from "./store-upkeep.js";
@@ -50,10 +50,14 @@ import { checkTrust, forgetTrustRecord, hasTrustRecord, rebindPackFiles, recordT
  *  error line only; never a record. */
 function deliveryHeaders(dir: string): Record<string, string> {
   try {
-    const { pending, oldest, queueId, seqAssigned, gapsTotal, gapsByReason } = queueStatus(dir);
+    const { pending, oldest, queueId, seqAssigned, gapsTotal, gapsByReason, bytes } = queueStatus(dir);
     const state = readDeliveryState(dir);
+    const fullness = queueFullness(bytes);
     return {
       "x-scopebond-pending": String(pending),
+      // The backlog's size, and whether the queue is full (new records then stay in this computer's log only).
+      "x-scopebond-pending-bytes": String(bytes),
+      ...(fullness ? { "x-scopebond-queue-full": fullness } : {}),
       ...(oldest !== null ? { "x-scopebond-oldest-pending-at": String(oldest) } : {}),
       // The oldest time is in this computer's clock; sending the clock beside it lets the workspace measure how long records
       // have waited on its own clock, and see a clock running ahead (its records are then refused as signed in the future).

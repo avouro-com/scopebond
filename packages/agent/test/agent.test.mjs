@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -185,6 +186,10 @@ test("autostart starts a launcher that finds Node and the agent each time, with 
   assert.match(sh, /^#!\/bin\/sh/);
   assert.ok(sh.includes(`NODE='/opt/node'\\''s/bin/node'`), "single quotes escaped");
   assert.match(sh, /nvm\.sh/);
+  // A Node removed by fnm, Volta, asdf or mise: their default Node is found, not only nvm's and Homebrew's.
+  for (const manager of ["/fnm}/aliases/default/bin/node", "/.volta}/bin/node", "/mise}/shims/node", "/.asdf}/shims/node"]) assert.ok(sh.includes(manager), manager);
+  const shCheck = spawnSync("/bin/sh", ["-n", "-c", sh], { encoding: "utf8" });
+  if (process.platform !== "win32") assert.equal(shCheck.status, 0, shCheck.stderr);
   assert.ok(sh.includes(`exec "$NODE" --disable-warning=ExperimentalWarning "$CLI" run`));
   assert.match(cmd, /--disable-warning=ExperimentalWarning "%CLI%" run/);
   const plist = macLaunchAgent("/opt/a&b/agent-launch.sh", "/var/tmp/scopebond-agent.log");

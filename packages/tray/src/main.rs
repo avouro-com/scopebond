@@ -262,10 +262,11 @@ fn agent_program() -> Option<PathBuf> {
     std::env::current_exe().ok().map(|p| p.with_file_name("scopebond-agent.exe"))
 }
 
-/// The agent program the macOS package installs.
+/// The agent program the macOS package installs (its root-owned folder; an older package's /usr/local/bin only while that
+/// is the one there).
 #[cfg(target_os = "macos")]
 fn agent_program() -> Option<PathBuf> {
-    Some(PathBuf::from(os::AGENT_PROGRAM))
+    Some(PathBuf::from(os::agent_program_in(|p| p.exists())))
 }
 
 /// Start `scopebond-agent.exe run` with no console window (supervise::agent_command: never with NODE_OPTIONS). It writes its
@@ -627,13 +628,31 @@ fn show_toast(toast: Toast, panel: Option<(AppHandle, Arc<Shared>)>) {
         }
     }
     thread::spawn(move || {
-        if os::notify(&toast.title, &toast.text) {
+        // Posted as Scopebond.app itself (tauri-plugin-notification); osascript only when the app's handle is not there yet
+        // or the plugin could not post it.
+        let native = NOTIFY_APP.get().map(|app| {
+            use tauri_plugin_notification::NotificationExt;
+            app.notification().builder().title(&toast.title).body(&toast.text).show()
+        });
+        let notified = match native {
+            Some(Ok(())) => true,
+            Some(Err(e)) => {
+                log::line(&format!("Notification Center did not take the notification ({e}); using osascript"));
+                os::notify(&toast.title, &toast.text)
+            }
+            None => os::notify(&toast.title, &toast.text),
+        };
+        if notified {
             log::line(&format!("notified: {}", toast.text));
         } else {
             log::line(&format!("could not notify: {}", toast.text));
         }
     });
 }
+
+/// The app's handle, for notifications posted from any thread (set once the app is set up).
+#[cfg(target_os = "macos")]
+static NOTIFY_APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
 
 fn draw(app: &AppHandle, shared: &Arc<Shared>) {
     let (answer, link) = shared.snapshot();
@@ -776,7 +795,7 @@ fn get_help(shared: &Arc<Shared>) {
     let agent = shared.client.call("GET", "/support", None, Duration::from_secs(15)).map_err(|e| e.to_string());
     let report = panel::help_report(SCOPEBOND_VERSION, link, agent);
     let copied = os::copy_text(&serde_json::to_string_pretty(&report).unwrap_or_default());
-    let opened = std::process::Command::new("explorer.exe").arg(panel::HELP_URL).spawn().is_ok();
+    let opened = std::process::Command::new(panel::url_opener()).arg(panel::HELP_URL).spawn().is_ok();
     *lock(&shared.busy) = None;
     shared.set_note(match (copied, opened) {
         (true, true) => "Support report copied (no keys, records or commands): paste it in your message. The Help page is opening.".into(),
@@ -1170,7 +1189,11 @@ fn main() {
     let shared = Arc::new(Shared::new(AgentClient::new(home)));
     let open_at_start = std::env::args().any(|a| a == "--status");
 
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // macOS: notifications in Notification Center as Scopebond.app (its bundle identifier, tauri.macos.conf.json).
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_plugin_notification::init());
+    let app = builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Started again (the Start-menu entry, or a second sign-in start): show the icon and the panel in this one.
             if let Some(tray) = app.tray_by_id(TRAY_ID) {
@@ -1187,6 +1210,8 @@ fn main() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             let handle = app.handle().clone();
+            #[cfg(target_os = "macos")]
+            let _ = NOTIFY_APP.set(handle.clone());
             if let Err(e) = create_tray(&handle, &shared) {
                 log::line(&format!("the tray icon could not be added yet: {e}"));
             }
@@ -1215,10 +1240,20 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("the Scopebond tray could not start");
-    app.run(|_app, event| {
+    app.run(|_app, event| match event {
         // The tray lives on with no window open: only an exit asked for in code ends it.
-        if let RunEvent::ExitRequested { api, code: None, .. } = event {
-            api.prevent_exit();
+        RunEvent::ExitRequested { api, code: None, .. } => api.prevent_exit(),
+        // macOS: Scopebond opened again (from Applications or Finder) while it runs. macOS reopens this app rather than
+        // starting a second one, so this is where a hidden icon comes back, as the Start-menu entry does on Windows.
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => {
+            if let Some(tray) = _app.tray_by_id(TRAY_ID) {
+                let _ = tray.set_visible(true);
+            }
+            if let Some(shared) = _app.try_state::<Arc<Shared>>() {
+                open_panel(_app, &shared.inner().clone(), None);
+            }
         }
+        _ => {}
     });
 }
