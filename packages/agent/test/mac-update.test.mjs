@@ -8,7 +8,7 @@ import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 const {
   MAC_INSTALLER_PUBLISHER, MANIFEST_DOMAIN, failedUpdate, macAutoUpdate, macPackageName, noteUpdateOutcome, readMacUpdateResult, readUpdatePending,
@@ -200,14 +200,13 @@ function releases(k, versions) {
   return { fetchImpl, calls };
 }
 
-test("a new agent that does not start is rolled back to the package kept from the last install, and the agents start again", async () => {
+test("a new agent that does not start is rolled back to the package kept from the last install", async () => {
   const paths = updater();
   const k = keys();
   const r = releases(k, ["9.9.8", NEW]);
   const installed = [];
-  const install = (file) => { installed.push(file.split("/").pop()); return 0; };
-  let started = 0;
-  const base = { paths, autoUpdate: () => true, fetchImpl: r.fetchImpl, publicKey: k.pub, check: () => ({ valid: true, subject: AVOURO }), install, startAgain: () => { started += 1; }, log: () => {} };
+  const install = (file) => { installed.push(basename(file)); return 0; };
+  const base = { paths, autoUpdate: () => true, fetchImpl: r.fetchImpl, publicKey: k.pub, check: () => ({ valid: true, subject: AVOURO }), install, startAgain: () => {}, log: () => {} };
   // 9.9.8 installs and runs: its package is kept.
   requestMacUpdate("9.9.8", 501, paths);
   assert.equal((await runMacUpdater({ ...base, running: "1.0.0", health: async () => null })).installed, true);
@@ -236,7 +235,7 @@ test("with no kept package the release before is downloaded and checked; when th
     let started = 0;
     requestMacUpdate(NEW, 501, paths);
     const result = await runMacUpdater({ paths, running: "9.9.7", autoUpdate: () => true, fetchImpl: r.fetchImpl, publicKey: k.pub, check: () => ({ valid: true, subject: AVOURO }),
-      install: (file) => { installed.push(file.split("/").pop()); return 0; }, health: async (v) => (v === NEW ? "no answer" : null), startAgain: () => { started += 1; }, log: () => {} });
+      install: (file) => { installed.push(basename(file)); return 0; }, health: async (v) => (v === NEW ? "no answer" : null), startAgain: () => { started += 1; }, log: () => {} });
     return { result, installed, started };
   };
   const fetched = await go(["9.9.7", NEW]);

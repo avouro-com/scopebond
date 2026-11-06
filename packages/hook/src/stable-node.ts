@@ -23,7 +23,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { posix, win32 } from "node:path";
 
 /** The oldest Node the hook runs on (package.json `engines`). */
 export const MIN_NODE = "22.13.0";
@@ -76,6 +76,7 @@ const atLeast = (version: string, min: string): boolean => {
 
 /** fnm's own folders: FNM_DIR, the folder the running Node is in, then fnm's defaults. */
 function fnmDirs(execPath: string, d: StableNodeDeps): string[] {
+  const join = d.platform === "win32" ? win32.join.bind(win32) : posix.join.bind(posix);
   const dirs: string[] = [];
   if (d.env.FNM_DIR) dirs.push(d.env.FNM_DIR);
   let real = execPath;
@@ -95,6 +96,8 @@ function fnmDirs(execPath: string, d: StableNodeDeps): string[] {
 /** The launchers tried in order, for a version-managed Node (see the top of this file). */
 export function stableNodeCandidates(execPath: string, deps: Partial<StableNodeDeps> = {}): string[] {
   const d = { ...systemDeps(), ...deps };
+  // Paths spelled for the platform asked about, whatever this one is.
+  const join = d.platform === "win32" ? win32.join.bind(win32) : posix.join.bind(posix);
   const alias = fnmDirs(execPath, d).map((dir) => d.platform === "win32" ? join(dir, "aliases", "default", "node.exe") : join(dir, "aliases", "default", "bin", "node"));
   const system = d.platform === "win32"
     ? [join(d.env.ProgramFiles ?? "C:\\Program Files", "nodejs", "node.exe")]

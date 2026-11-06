@@ -223,7 +223,7 @@ export async function macAgentHealth(version: string, o: { exe?: string; deadlin
   const pidOf = o.pid ?? agentPid;
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const seen = new Map<number, { pid: number; since: number }>();
-  let why = "it was not checked";
+  let why: string;
   for (;;) {
     const said = reports(exe).trim();
     if (!said.startsWith(`agent/${version} `)) why = `${exe} reports ${JSON.stringify(said.slice(0, 80) || "nothing")}, not agent/${version}`;
