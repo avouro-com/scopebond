@@ -2,8 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- The Scopebond package's updater, as root (the macOS installer package puts it in /Library/LaunchDaemons, and the
      program it runs in /Library/PrivilegedHelperTools, a folder only root can write). launchd
-     starts it when a person's agent leaves a request in the requests folder; it installs the newest signed, notarized
-     release asked for and exits (packages/agent/src/mac-update.ts). It never runs otherwise. -->
+     starts it while the requests folder is not empty (QueueDirectories): a person's agent leaves a request there, the
+     updater takes everything in it, installs the newest signed, notarized release asked for and exits
+     (packages/agent/src/mac-update.ts); a request left while it ran starts it again. It never runs otherwise. WatchPaths
+     would start it once when it is loaded and drop a request made while it runs. -->
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.scopebond.updater</string>
@@ -12,7 +14,7 @@
     <string>/Library/PrivilegedHelperTools/com.scopebond.updater</string>
     <string>update-daemon</string>
   </array>
-  <key>WatchPaths</key>
+  <key>QueueDirectories</key>
   <array><string>/Library/Application Support/Scopebond/update-requests</string></array>
   <key>ThrottleInterval</key><integer>60</integer>
   <key>ProcessType</key><string>Background</string>

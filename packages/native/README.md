@@ -140,12 +140,15 @@ macOS 11 or later. The package:
   version, the icon `icon.mjs` draws, signed ad hoc; the release signs it with the Developer ID) and its LaunchAgent
   `/Library/LaunchAgents/com.scopebond.tray.plist`, which opens it at each sign-in;
 - adds the updater, the LaunchDaemon `/Library/LaunchDaemons/com.scopebond.updater.plist` (root): launchd starts
-  `scopebond-agent update-daemon` when a person's agent leaves a request in `/Library/Application Support/Scopebond/update-requests`
-  (writable by everyone, readable by root alone). It installs the newest signed, notarized release asked for, as the
-  agent README describes, then waits for the new agent to run for everyone signed in; when it does not, it installs the
-  release before again (the package it kept from that install, or the release downloaded and checked again) and records
-  the update as failed. Every agent is started again afterwards, also when the package failed part way. Anything in the
-  folder that is not a request file is skipped and logged. It writes `update-result.json` beside it;
+  `scopebond-agent update-daemon` while `/Library/Application Support/Scopebond/update-requests` (writable by everyone,
+  readable by root alone) is not empty (`QueueDirectories`), so a request a person's agent leaves while the updater runs
+  starts it again instead of being lost (`WatchPaths` dropped such a change, and fired once when the package loaded it).
+  It installs the newest signed, notarized release asked for, as the agent README describes, then waits for the new
+  agent to run for everyone signed in; when it does not, it installs the release before again (the package it kept from
+  that install, or the release downloaded and checked again) and records the update as failed. Every agent is started
+  again afterwards, also when the package failed part way. Anything in the folder that is not a request file is removed
+  without being read or followed, and logged, so the folder is empty after each run (a directory that is not empty is
+  moved into the updater's own folder). It writes `update-result.json` beside it;
 - adds the LaunchAgent `/Library/LaunchAgents/com.scopebond.agent.plist`, which runs `scopebond-agent run` as each person
   who signs in, with the agent's log in their Scopebond folder; a crash restarts it after 30 seconds, a clean stop does
   not. Its label is the agent's own autostart label, so launchd never runs a second agent beside it;

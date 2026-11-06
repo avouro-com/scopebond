@@ -12,7 +12,7 @@ import { basename, join } from "node:path";
 
 const {
   MAC_INSTALLER_PUBLISHER, MANIFEST_DOMAIN, failedUpdate, macAutoUpdate, macPackageName, noteUpdateOutcome, readMacUpdateResult, readUpdatePending,
-  requestMacUpdate, runMacUpdater, takeMacUpdateResult, writeUpdatePending,
+  requestMacUpdate, runMacUpdater, takeMacUpdateResult, takeRequests, writeUpdatePending,
 } = await import("../dist/index.js");
 
 const NEW = "9.9.9";
@@ -83,7 +83,7 @@ test("the updater installs the newest signed release asked for, from the file it
   assert.equal(result?.installed, true, result?.reason ?? "");
   assert.equal(result.version, NEW, "the highest asked for");
   assert.deepEqual(done, [pkg], "installed exactly the package checked");
-  assert.deepEqual(readdirSync(paths.requests), ["notes.txt"], "the requests were taken; anything else is left");
+  assert.deepEqual(readdirSync(paths.requests), [], "the requests were taken and anything else removed: launchd starts the updater while the folder is not empty");
   assert.deepEqual(readMacUpdateResult(paths), { ...result, log: null });
   assert.ok(!existsSync(join(paths.work, "updates", macPackageName(NEW))), "the downloaded package is gone");
 });
@@ -165,17 +165,23 @@ test("a request file is read only when it is itself a small regular file", async
   assert.doesNotMatch(plist, /\/usr\/local\/bin/);
 });
 
-// The requests folder is writable by everyone: whatever is put there under a request's name (a directory, a
-// link, a pipe) is skipped and logged, never read, and never stops the root updater. Before, a directory named like a
-// request made it throw on every run, so no update ever installed again.
-test("a directory, a link or a pipe named like a request does not stop the updater", async () => {
+// The requests folder is writable by everyone: whatever is put there (a directory, a link, a pipe, under a request's name
+// or another) is never read or followed, never stops the root updater, and does not stay: launchd starts the updater
+// while the folder is not empty (QueueDirectories), so anything left would start it again and again. Before, a directory
+// named like a request made it throw on every run, so no update ever installed again.
+test("a directory, a link or a pipe in the requests folder does not stop the updater, and does not stay", async () => {
   const paths = updater();
   const k = keys();
   const r = release(k);
   mkdirSync(join(paths.requests, "501-0123456789abcdef.json"));
+  mkdirSync(join(paths.requests, "full"));
+  writeFileSync(join(paths.requests, "full", "keep.txt"), "never removed by root");
+  const outside = mkdtempSync(join(tmpdir(), "sb-mac-outside-"));
+  writeFileSync(join(outside, "target"), "not followed");
   if (process.platform !== "win32") {
     spawnSync("mkfifo", [join(paths.requests, "502-0123456789abcdef.json")]);
-    try { symlinkSync("/etc/hosts", join(paths.requests, "503-0123456789abcdef.json")); } catch { /* no links here */ }
+    try { symlinkSync(join(outside, "target"), join(paths.requests, "503-0123456789abcdef.json")); } catch { /* no links here */ }
+    try { symlinkSync(outside, join(paths.requests, "a-folder-link")); } catch { /* no links here */ }
   }
   requestMacUpdate(NEW, 504, paths);
   const lines = [];
@@ -183,9 +189,26 @@ test("a directory, a link or a pipe named like a request does not stop the updat
   const result = await runMacUpdater({ paths, running: "1.0.0", autoUpdate: () => true, fetchImpl: r.fetchImpl, publicKey: k.pub, check: () => ({ valid: true, subject: AVOURO }), install, health: async () => null, startAgain: () => {}, log: (l) => lines.push(l) });
   assert.equal(result?.installed, true, result?.reason ?? "");
   assert.deepEqual(done, [pkg]);
-  assert.ok(lines.some((l) => /skipped 501-0123456789abcdef\.json .*not a regular file/.test(l)), lines.join("\n"));
-  // Run again: still nothing throws, and the directory is still only skipped.
+  assert.ok(lines.some((l) => /removed 501-0123456789abcdef\.json from the requests folder: not a regular file/.test(l)), lines.join("\n"));
+  assert.deepEqual(readdirSync(paths.requests), [], "the folder is empty");
+  // The folder that was not empty is moved whole into root's own folder, its contents untouched; links went themselves.
+  const [moved] = readdirSync(join(paths.work, "strays"));
+  assert.match(moved, /^full-[0-9a-f]{16}$/);
+  assert.equal(readFileSync(join(paths.work, "strays", moved, "keep.txt"), "utf8"), "never removed by root");
+  assert.equal(readFileSync(join(outside, "target"), "utf8"), "not followed");
+  // Run again: nothing to do, nothing throws.
   assert.equal(await runMacUpdater({ paths, running: NEW, autoUpdate: () => true, log: () => {} }), null);
+});
+
+test("takeRequests leaves an entry it cannot remove without a strays folder, and says so", () => {
+  const paths = updater();
+  mkdirSync(join(paths.requests, "full"));
+  writeFileSync(join(paths.requests, "full", "x"), "x");
+  requestMacUpdate("2.0.0", 501, paths);
+  const lines = [];
+  assert.deepEqual(takeRequests(paths.requests, (l) => lines.push(l)), ["2.0.0"]);
+  assert.deepEqual(readdirSync(paths.requests), ["full"]);
+  assert.ok(lines.some((l) => /^left full in the requests folder: a folder that is not empty$/.test(l)), lines.join("\n"));
 });
 
 /** A release server with several versions. */

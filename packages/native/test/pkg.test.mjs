@@ -39,7 +39,8 @@ test("the package's files agree with the agent: its path, its autostart label an
   // It runs the root-only copy in /Library/PrivilegedHelperTools, never /usr/local/bin (which a person may own).
   assert.ok(daemon.includes(`<string>${MAC_UPDATER_EXE}</string>\n    <string>${MAC_UPDATER_COMMAND}</string>`));
   assert.ok(!daemon.includes(MAC_PACKAGE_EXE));
-  assert.ok(daemon.includes(`<array><string>${MAC_UPDATER_PATHS.requests}</string></array>`), "WatchPaths is the requests folder");
+  assert.ok(daemon.includes(`<key>QueueDirectories</key>\n  <array><string>${MAC_UPDATER_PATHS.requests}</string></array>`), "it runs while the requests folder is not empty");
+  assert.ok(!daemon.includes("<key>WatchPaths</key>"), "never WatchPaths: it fires once on load and drops a request made while the updater runs");
   const postinstall = read("scripts", "postinstall");
   assert.ok(postinstall.includes('/bin/chmod 1733 "$SUPPORT/update-requests"') && postinstall.includes('/bin/chmod 0700 "$SUPPORT/updater"'));
   assert.equal(`/Library/Application Support/Scopebond/update-requests`, MAC_UPDATER_PATHS.requests);
@@ -211,7 +212,7 @@ test("the package installs the executable, the LaunchAgent and the uninstall scr
   assert.deepEqual(JSON.parse(spawnSync("plutil", ["-convert", "json", "-o", "-", updater], { encoding: "utf8" }).stdout), {
     Label: MAC_UPDATER_LABEL,
     ProgramArguments: [MAC_UPDATER_EXE, MAC_UPDATER_COMMAND],
-    WatchPaths: [MAC_UPDATER_PATHS.requests],
+    QueueDirectories: [MAC_UPDATER_PATHS.requests],
     ThrottleInterval: 60,
     ProcessType: "Background",
     StandardOutPath: "/Library/Logs/Scopebond-updater.log",
