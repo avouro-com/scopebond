@@ -192,6 +192,9 @@ const SHELL_STARTUP_WRITE = [
   named("PowerShell/Microsoft\\.PowerShell_profile\\.ps1"), named("PowerShell/Microsoft\\.VSCode_profile\\.ps1"), named("PowerShell/profile\\.ps1"),
   named("WindowsPowerShell/Microsoft\\.PowerShell_profile\\.ps1"), named("WindowsPowerShell/Microsoft\\.VSCode_profile\\.ps1"),
   named("WindowsPowerShell/profile\\.ps1"),
+  // Git's per-person settings run code too (`core.hooksPath`, `core.fsmonitor`, aliases starting with `!`): writing the file is
+  // refused as `git config --global` setting those keys is.
+  named("\\.gitconfig"), named("\\.config/git/config"),
 ];
 /** The shell startup files' part of the floor, as bare lookaheads. */
 export const SHELL_STARTUP_FLOOR = SHELL_STARTUP_WRITE.join("");
@@ -316,7 +319,7 @@ function realPathOf(path: string): string | null {
  *  folder that leads into Scopebond's own folder or a coding tool's settings is also recorded as that place, so the floor sees it.
  *  A path only known at run time, or one that leads nowhere else, is left as it is. */
 /** A path segment of a place the floor guards: Scopebond's own folder, a coding tool's settings folder, an installed program. */
-const GUARDED_SEGMENT = /\/(?:\.scopebond|\.claude|\.cursor|\.codex|\.copilot)(?:\/|$)|\/Programs\/Scopebond(?:\/|$)|\/node_modules\/@scopebond\/(?:hook|agent)(?:\/|$)/i;
+const GUARDED_SEGMENT = /\/(?:\.scopebond|\.claude|\.cursor|\.codex|\.copilot|\.git|\.github|\.githooks|\.husky)(?:\/|$)|\/Programs\/Scopebond(?:\/|$)|\/node_modules\/@scopebond\/(?:hook|agent)(?:\/|$)|\/\.(?:bashrc|bash_profile|bash_login|profile|zshrc|zshenv|zprofile|zlogin|kshrc|cshrc|tcshrc|pam_environment|gitconfig)$|\/\.config\/(?:fish|git|environment\.d)\/|\/(?:Windows)?PowerShell\/[^/]*profile\.ps1$/i;
 
 export function realPathIntents(m: Mapped, cwd: string, homes: readonly string[]): Mapped[] {
   const type = m.intent.action_type;
@@ -325,16 +328,24 @@ export function realPathIntents(m: Mapped, cwd: string, homes: readonly string[]
   const home = homes.find((h) => h && h !== "/");
   if (path.startsWith("~") && !(home && (path === "~" || /^~[\\/]/.test(path)))) return [m];
   const absolute = path.startsWith("~") ? resolve(home!, path.slice(2)) : resolve(cwd, path);
-  const real = realPathOf(absolute);
-  if (real === null) return [m];
   const same = (a: string, b: string): boolean => (process.platform === "win32" || process.platform === "darwin" ? a.toLowerCase() === b.toLowerCase() : a === b);
-  if (same(slashed(real), slashed(absolute))) return [m];
+  const at = (p: string): Mapped => {
+    const other: Mapped = { ...m, intent: { ...m.intent, params: { ...m.intent.params, path: p } } };
+    delete other.shown;
+    return other;
+  };
+  const out: Mapped[] = [m];
+  // A `..` part names the folder above the one before it: `.claude/projects/../settings.json` is `.claude/settings.json`. The
+  // patterns read the path as written, so the path with every `..` resolved is judged as well (whatever it leads to).
+  const lexical = slashed(absolute);
+  if (/(?:^|[\\/])\.\.(?:[\\/]|$)/.test(path)) out.push(at(lexical));
+  const real = realPathOf(absolute);
+  if (real === null || same(slashed(real), lexical)) return out;
   // Only a link that lands in a place the floor guards adds the real path: an ordinary link (macOS /home, /tmp) adds nothing, so
   // records keep the path as written (and its ~ masking).
-  if (!GUARDED_SEGMENT.test(slashed(real))) return [m];
-  const rest: Mapped = { ...m, intent: { ...m.intent, params: { ...m.intent.params, path: slashed(real) } } };
-  delete rest.shown;
-  return [m, rest];
+  if (!GUARDED_SEGMENT.test(slashed(real))) return out;
+  out.push(at(slashed(real)));
+  return out;
 }
 
 const PROTECTED_READ = "^" + [

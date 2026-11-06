@@ -1808,10 +1808,84 @@ function capDerived(mapped: Mapped[]): Mapped[] {
   return out;
 }
 
+// Code the command line decodes and then runs cannot be read before it runs: `echo <base64> | base64 -d | sh`,
+// `eval "$(xxd -r -p <<< …)"`, `python3 -c 'exec(bytes.fromhex(…))'`. What it changes is unknowable, so the always-on protection
+// cannot judge it by the places it names; it is treated as switching Scopebond off, as unreadable code naming Scopebond is.
+// Plain unreadable code (`eval "$(fnm env)"`, `curl … | sh`) is not covered here: only code that was encoded on purpose.
+// Every check below is a single pass over words (no regular expression that can backtrack), so a long command costs linear time.
+const DECODER_PROGRAMS = new Set(["base64", "gbase64", "basenc", "base32", "xxd", "uudecode", "openssl"]);
+const DECODE_FLAGS = new Set(["-d", "-D", "--decode", "-r", "-rp", "-pr", "-r-p"]);
+const RUNNERS = new Set(["sh", "bash", "zsh", "dash", "ksh", "mksh", "fish", "node", "nodejs", "deno", "bun", "perl", "ruby", "php", "pwsh", "powershell"]);
+const PREFIX_WORDS = new Set(["env", "exec", "command", "nohup", "sudo", "doas", "time", "builtin"]);
+const CODE_INTERPRETERS = new Set(["python", "node", "nodejs", "deno", "bun", "perl", "ruby", "php"]);
+const CODE_FLAGS = new Set(["-c", "-e", "-E", "-r", "--eval", "--command", "-p", "--print"]);
+const programName = (word: string): string => {
+  const base = word.slice(Math.max(word.lastIndexOf("/"), word.lastIndexOf("\\")) + 1).toLowerCase().replace(/\.exe$/, "");
+  return /^python[0-9.]*$/.test(base) ? "python" : base;
+};
+const wordsOf = (text: string): string[] => text.split(/\s+/).filter(Boolean).map((w) => w.replace(/^["'(]+|["')]+$/g, ""));
+/** A pipeline stage that decodes: `base64 -d`, `xxd -r -p`, `openssl enc -d -base64`, `uudecode`. */
+function decodesStage(stage: string): boolean {
+  const words = wordsOf(stage);
+  let i = 0;
+  while (i < words.length && (PREFIX_WORDS.has(programName(words[i])) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]))) i++;
+  const program = words[i] === undefined ? "" : programName(words[i]);
+  if (!DECODER_PROGRAMS.has(program)) return false;
+  if (program === "uudecode") return true;
+  const rest = words.slice(i + 1, i + 12);
+  if (program === "openssl") return rest.includes("-d") && (rest[0] === "enc" || rest[0] === "base64");
+  return rest.some((w) => DECODE_FLAGS.has(w));
+}
+/** A pipeline stage that runs what it reads: a shell or an interpreter, perhaps behind `env`, `exec` or `sudo`. */
+function runsStage(stage: string): boolean {
+  const words = wordsOf(stage);
+  let i = 0;
+  while (i < words.length && (PREFIX_WORDS.has(programName(words[i])) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]) || /^-/.test(words[i]))) i++;
+  const program = words[i] === undefined ? "" : programName(words[i]);
+  return RUNNERS.has(program) || program === "python";
+}
+const CODE_DECODES = ["b64decode", "b32decode", "a85decode", "fromhex", "unhexlify", "decodebytes", "codecs.decode", "atob(", "mime::base64", "decode_base64", "base64_decode", "hex2bin", "str_rot13", "zlib.decompress", "inflatesync", "gunzipsync", "pack(\"h", "pack('h", "unpack(\"m", "unpack('m", "unpack1(\"m", "unpack1('m"];
+const CODE_RUNS = ["exec", "eval", "compile(", "system", "popen", "spawn", "execsync", "execfile", "function(", "subprocess", "os.", "writefile", "open(", "import(", "require("];
+
+/** Whether the command line runs code that it decodes first. Exported for tests. */
+export function runsDecodedCode(command: string): boolean {
+  // Lists (`;`, `&&`, `||`, `&`, new lines), then the stages of each pipeline.
+  for (const list of command.split(/\|\||&&|[;&\n]/)) {
+    let decoded = false;
+    for (const stage of list.split("|")) {
+      if (decoded && runsStage(stage)) return true;
+      if (decodesStage(stage)) decoded = true;
+    }
+  }
+  // A substitution that decodes, run by eval, source, `.` or a shell's -c: `eval "$(echo … | base64 -d)"`, `source <(base64 -d f)`.
+  const words = wordsOf(command).map(programName);
+  const runsText = words.some((w, i) => w === "eval" || w === "source" || w === "." || ((RUNNERS.has(w) || w === "python") && words[i + 1] === "-c"));
+  if (runsText) {
+    for (const open of ["$(", "`", "<("]) {
+      let from = command.indexOf(open);
+      while (from >= 0) {
+        const start = from + open.length;
+        const close = command.indexOf(open === "`" ? "`" : ")", start);
+        const inner = command.slice(start, close < 0 ? Math.min(command.length, start + 4096) : Math.min(close, start + 4096));
+        if (inner.split(/\|\||&&|[;&|\n]/).some(decodesStage)) return true;
+        from = close < 0 ? -1 : command.indexOf(open, close + 1);
+      }
+    }
+  }
+  // An interpreter given code on the command line that decodes and runs: `python3 -c 'exec(bytes.fromhex(…))'`.
+  const raw = command.split(/\s+/);
+  const lower = command.toLowerCase();
+  const interpreterCode = raw.some((w, i) => CODE_INTERPRETERS.has(programName(w.replace(/^["'(]+/, ""))) && raw.slice(i + 1, i + 8).some((f) => CODE_FLAGS.has(f)));
+  if (!interpreterCode) return false;
+  const buffer = lower.includes("buffer.from(") && /['"](?:base64|hex|base64url)['"]/.test(lower);
+  return (buffer || CODE_DECODES.some((d) => lower.includes(d))) && CODE_RUNS.some((r) => lower.includes(r));
+}
+
 function mapShell(command: string, cwd?: string, dialect: "posix" | "powershell" = "posix"): Mapped[] {
   // What the command line installs or runs from outside the project (typed-install.ts), beside its commands.
   const installs: Mapped[] = deriveInstalls(command, dialect).map((intent) => ({ intent, evaluated: true, derived: true, source: "shell" }));
-  return capDerived([...mapShellCall(command, cwd, dialect), ...installs]);
+  const decoded = runsDecodedCode(command) ? pathIntents("file.write", ".scopebond/policy.json", "shell") : [];
+  return [...decoded, ...capDerived([...mapShellCall(command, cwd, dialect), ...installs])];
 }
 
 function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powershell" = "posix"): Mapped[] {
