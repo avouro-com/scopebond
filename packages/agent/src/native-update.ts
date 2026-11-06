@@ -63,8 +63,17 @@ function inDate(key: UpdaterKey, now: number): boolean {
 
 export type InstallKind = "npm" | "per-user" | "per-machine";
 
+/** The folder the macOS installer package puts the executable in: owned by root, so nobody else can replace what every
+ *  person's agent, hook entries and menu-bar app run. (/usr/local/bin can belong to a person: Homebrew on Intel takes
+ *  /usr/local over.) */
+export const MAC_PACKAGE_BIN = "/Library/Application Support/Scopebond/bin";
 /** Where the macOS installer package puts the executable: installed for every user of the Mac, by an administrator. */
-export const MAC_PACKAGE_EXE = "/usr/local/bin/scopebond-agent";
+export const MAC_PACKAGE_EXE = `${MAC_PACKAGE_BIN}/scopebond-agent`;
+/** A link to it on PATH, for terminals only: nothing the package starts runs it. Releases before the root-owned folder
+ *  installed the executable itself here. */
+export const MAC_PACKAGE_LINK = "/usr/local/bin/scopebond-agent";
+/** The package's postinstall runs this as each person whose hook entries still name MAC_PACKAGE_LINK. */
+export const MAC_MOVE_ENTRIES_COMMAND = "move-hook-entries";
 /** The macOS package's menu-bar app (packages/tray): it shows the agent's state and notifies, as the Windows tray does. */
 export const MAC_TRAY_APP = "/Applications/Scopebond.app";
 
@@ -72,7 +81,8 @@ export const MAC_TRAY_APP = "/Applications/Scopebond.app";
  *  package). */
 export function installKind(execPath = process.execPath, single = isSingleExecutable(), programFiles = process.env.ProgramFiles ?? "C:\\Program Files"): InstallKind {
   if (!single) return "npm";
-  if (execPath === MAC_PACKAGE_EXE) return "per-machine";
+  // The link's own path too: an older package's executable, still running until the new one starts.
+  if (execPath === MAC_PACKAGE_EXE || execPath === MAC_PACKAGE_LINK) return "per-machine";
   // The folder without trailing separators (a loop, not a regular expression, on a value from the environment).
   let folder = programFiles.toLowerCase();
   while (folder.endsWith("\\") || folder.endsWith("/")) folder = folder.slice(0, -1);

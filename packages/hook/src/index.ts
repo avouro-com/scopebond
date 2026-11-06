@@ -144,6 +144,7 @@ export {
   localHarnessFile, isMachineSpecificCommand, gitShareState, excludeFromGit, pruneHarnessEntries,
 } from "./install.js";
 export type { Harness, HarnessScopes, GitShare } from "./install.js";
+export { stableNodePath, stableNodeCandidates, isVersionManagedNode, MIN_NODE, type StableNodeDeps } from "./stable-node.js";
 export { explainDeny, describeAction, findClause, FINAL_INSTRUCTION } from "./explain.js";
 export type { ExplainDenyInput, ExplainIntent, ExplainPolicy, ExplainClause } from "./explain.js";
 export {
@@ -180,7 +181,7 @@ export type { SqlClass, SqlVerb } from "./sql-classify.js";
 // Delivery, status and identity pieces the Scopebond Agent reuses (one implementation, one contract).
 export { readDeliveryState, writeDeliveryState, recordDeliveryAttempt, recordRulesCredential, deliveryBackoff, waitingUntil, DELIVERY_STATE_FILE } from "./delivery-state.js";
 export type { DeliveryState } from "./delivery-state.js";
-export { clockTime, describeDelivery, flushOutcome, queueStatus, LOSSLESS_OUTBOX, OUTBOX_FILE } from "./delivery-report.js";
+export { clockTime, describeDelivery, flushOutcome, queueStatus, queueFullness, deliveryQueueLimits, outboxMaxBytes, LOSSLESS_OUTBOX, OUTBOX_FILE, OUTBOX_MAX_BYTES } from "./delivery-report.js";
 export type { FlushOutcome } from "./delivery-report.js";
 export {
   repairDelivery, repairDeliveryAt, backfillQueue, settleInterruptedActions, noteQueueMiss, BACKFILL_FILE, INTERRUPTED_AFTER_MS, INTERRUPTED_REFERENCE,

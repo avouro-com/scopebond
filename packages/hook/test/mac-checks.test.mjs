@@ -5,13 +5,14 @@ import assert from "node:assert/strict";
 import { macInstallChecks, MAC_PACKAGE } from "../dist/index.js";
 
 /** A Mac as the checks see it: which files exist and what each command answers. */
-function mac({ quarantined = false, files = [MAC_PACKAGE.launchAgent, MAC_PACKAGE.updaterPlist, MAC_PACKAGE.updaterExe], session = true, loaded = true, disabled = "" } = {}) {
+function mac({ quarantined = false, files = [MAC_PACKAGE.launchAgent, MAC_PACKAGE.updaterPlist, MAC_PACKAGE.updaterExe], session = true, loaded = true, disabled = "", owners = {} } = {}) {
   const calls = [];
   return {
     calls,
     deps: {
       uid: 501,
       exists: (p) => files.includes(p),
+      owner: (p) => (p in owners ? owners[p] : { uid: 0, mode: 0o755, link: false }),
       run(program, args) {
         calls.push([program, ...args].join(" "));
         if (program.endsWith("xattr")) return { status: quarantined ? 0 : 1, stdout: "" };
@@ -28,7 +29,7 @@ const byName = (checks) => Object.fromEntries(checks.map((c) => [c.name, c]));
 test("the package's program: not quarantined, its LaunchAgent loaded and its updater in place", () => {
   const { deps } = mac();
   const checks = byName(macInstallChecks(MAC_PACKAGE.exe, deps));
-  assert.deepEqual(Object.keys(checks), ["quarantine", "launch agent", "updater"]);
+  assert.deepEqual(Object.keys(checks), ["quarantine", "root-owned", "launch agent", "updater"]);
   for (const c of Object.values(checks)) assert.equal(c.ok, true, `${c.name}: ${c.detail}`);
   assert.match(checks["launch agent"].detail, /com\.scopebond\.agent is loaded/);
 });
@@ -68,4 +69,17 @@ test("a missing LaunchAgent or updater says to install the package again", () =>
   assert.match(checks["launch agent"].fix, /install the Scopebond package again/);
   assert.equal(checks.updater.ok, false);
   assert.match(checks.updater.fix, /install the Scopebond package again/);
+});
+
+test("the package's program and every folder above it must be root's alone", () => {
+  assert.equal(MAC_PACKAGE.exe, "/Library/Application Support/Scopebond/bin/scopebond-agent", "not /usr/local/bin, which a person may own");
+  const check = (owners) => byName(macInstallChecks(MAC_PACKAGE.exe, mac({ owners }).deps))["root-owned"];
+  assert.equal(check({}).ok, true);
+  const person = check({ "/Library/Application Support/Scopebond/bin": { uid: 501, mode: 0o755, link: false } });
+  assert.equal(person.ok, false);
+  assert.match(person.detail, /Scopebond\/bin can be changed by someone other than root/);
+  assert.match(person.fix, /install the Scopebond package again/);
+  assert.equal(check({ [MAC_PACKAGE.exe]: { uid: 0, mode: 0o775, link: false } }).ok, false, "group-writable");
+  assert.equal(check({ "/Library/Application Support/Scopebond": { uid: 0, mode: 0o755, link: true } }).ok, false, "a link");
+  assert.equal(check({ [MAC_PACKAGE.exe]: null }).ok, false, "missing");
 });

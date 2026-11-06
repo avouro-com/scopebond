@@ -1,7 +1,8 @@
 //! macOS: what the menu-bar app asks of the system, with macOS's own tools by their full paths. Opening at login is the
 //! app's own LaunchAgent (the package installs it for every user; launchd keeps a person's choice to turn it off); the
 //! agent is kept running by its own LaunchAgent, so the app restarts it through launchd and never starts a second one;
-//! notifications, the clipboard and a message box come from the system's own programs.
+//! notifications are posted as the app itself (tauri-plugin-notification, in main.rs), with `osascript` as the fallback
+//! here; the clipboard and a message box come from the system's own programs.
 
 use std::io::Write;
 use std::path::Path;
@@ -15,8 +16,21 @@ pub const AGENT_LABEL: &str = "com.scopebond.agent";
 /// The menu-bar app's own LaunchAgent, which the package puts in /Library/LaunchAgents.
 pub const TRAY_LABEL: &str = "com.scopebond.tray";
 pub const TRAY_PLIST: &str = "/Library/LaunchAgents/com.scopebond.tray.plist";
-/// The agent program the package installs.
-pub const AGENT_PROGRAM: &str = "/usr/local/bin/scopebond-agent";
+/// The agent program the package installs, in a folder only root can change. /usr/local/bin/scopebond-agent is only a link
+/// to it, for PATH: /usr/local can belong to a person (Homebrew on Intel Macs), so nothing runs the program from there.
+pub const AGENT_PROGRAM: &str = "/Library/Application Support/Scopebond/bin/scopebond-agent";
+/// Where packages before the root-owned folder put the program: used only while it is the one there (an upgrade not
+/// finished).
+pub const OLD_AGENT_PROGRAM: &str = "/usr/local/bin/scopebond-agent";
+
+/// The agent program to supervise: the root-owned one, or the old location only when the root-owned one is missing.
+pub fn agent_program_in(exists: impl Fn(&Path) -> bool) -> &'static str {
+    if !exists(Path::new(AGENT_PROGRAM)) && exists(Path::new(OLD_AGENT_PROGRAM)) {
+        OLD_AGENT_PROGRAM
+    } else {
+        AGENT_PROGRAM
+    }
+}
 /// The package's uninstall script (it needs an administrator).
 pub const UNINSTALL_SCRIPT: &str = "/Library/Application Support/Scopebond/uninstall.sh";
 
@@ -86,7 +100,8 @@ pub fn message(title: &str, text: &str) {
     let _ = osascript(&DIALOG, title, text);
 }
 
-/// A notification in Notification Center. macOS shows it under the program that posts it; there are no buttons, and the
+/// A notification in Notification Center through osascript: the fallback when the app's own notification (main.rs,
+/// tauri-plugin-notification) cannot be posted. macOS shows this one under Script Editor; there are no buttons, and the
 /// menu-bar icon opens the panel for whatever it is about.
 pub fn notify(title: &str, text: &str) -> bool {
     osascript(&NOTIFICATION, title, text)
@@ -153,6 +168,14 @@ pub fn set_autostart(on: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_agent_runs_from_the_root_owned_folder() {
+        assert!(AGENT_PROGRAM.starts_with("/Library/Application Support/Scopebond/"), "never from /usr/local/bin, which a person may own");
+        assert_eq!(agent_program_in(|_| true), AGENT_PROGRAM);
+        assert_eq!(agent_program_in(|_| false), AGENT_PROGRAM, "nothing installed: the package's place");
+        assert_eq!(agent_program_in(|p| p == Path::new(OLD_AGENT_PROGRAM)), OLD_AGENT_PROGRAM, "an older package's layout only while it is the one there");
+    }
 
     #[test]
     fn a_disabled_label_is_read_from_launchds_list() {

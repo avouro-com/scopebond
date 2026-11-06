@@ -16,6 +16,7 @@ import { canonical } from "@scopebond/gateway";
 import { findProgram, programPath, windowsSystemProgram } from "@scopebond/gateway/node";
 import { readIfPresent, replaceFile } from "./safe-fs.js";
 import { hookCliPath } from "./self.js";
+import { stableNodePath } from "./stable-node.js";
 import { accountHome, setting } from "./env-trust.js";
 import { editHarnessConfig, readConfigText as readBoundedConfigText } from "./config-edit.js";
 
@@ -763,14 +764,15 @@ export function quotedEntryNote(harness: Harness, files: Array<string | null | u
  *  Bash. Each reads quotes differently, so both paths are written in the shell-plain spelling (`shellPlainWindowsPath`),
  *  which all of them start the same way. Only when a path has no such spelling are both paths quoted — the form cmd.exe
  *  and Git Bash run (inside double quotes bash leaves a Windows path's backslashes alone); PowerShell cannot run it. */
-export function absoluteHookCommand(cliPath: string, harness: Harness, shorten: ShortPathFinder = windowsShortPath): string {
+export function absoluteHookCommand(cliPath: string, harness: Harness, shorten: ShortPathFinder = windowsShortPath, node: string = stableNodePath(process.execPath)): string {
+  // `node` is the running Node, or a launcher that outlives a version manager's uninstall (stable-node.ts).
   if (process.platform === "win32") {
-    const plain = windowsHookCommandLine([process.execPath, cliPath], harness, shorten);
+    const plain = windowsHookCommandLine([node, cliPath], harness, shorten);
     if (plain) return plain;
-    refuseUnsafeQuotedPaths([process.execPath, cliPath]);
+    refuseUnsafeQuotedPaths([node, cliPath]);
   }
   const quote = (s: string) => (process.platform === "win32" || /\s/.test(s) ? `"${s}"` : s);
-  return `${quote(process.execPath)} ${quote(cliPath)} ${harness}`;
+  return `${quote(node)} ${quote(cliPath)} ${harness}`;
 }
 
 /** The command a coding agent's settings run when Scopebond is installed as the single executable: the executable itself
@@ -862,25 +864,28 @@ export function npxAvailable(platform: NodeJS.Platform = process.platform): bool
 
 /** Whether a configured hook command can actually start. An `npx` form always can
  *  (npm resolves it); a pinned command names two absolute paths — the Node binary and
- *  the CLI — and either can go away: a Node version manager switching versions, or the
- *  Scopebond home being cleared. Both are exactly what this check exists to catch. */
+ *  the CLI — and either can go away: a Node version manager uninstalling a version, or the
+ *  Scopebond home being cleared. Both are exactly what this check exists to catch.
+ *
+ *  The program (the first word) is checked whatever its name: on macOS and Linux Node is
+ *  `…/bin/node`, with no extension, and an fnm, Volta or nvm uninstall removes it. A bare
+ *  program name (`node cli.js`) depends on the coding agent's PATH, which this process does
+ *  not share (an agent started by launchd has a minimal one), so only its script is checked. */
 export function hookCommandResolves(command: string): boolean {
+  const exists = existsSync;
   if (/(^|\s)npx(\.cmd)?\s/.test(command)) return true;
-  // `"<node>" "<cli.js>" claude`: check every token that names a file on disk.
+  // `"<node>" "<cli.js>" claude`: the program, then every other token that names a script or program on disk.
   const tokens = command.match(/"[^"]+"|\S+/g) ?? [];
-  let checked = 0;
-  for (const raw of tokens) {
-    const candidate = raw.replace(/^"|"$/g, "");
+  const unquote = (raw: string) => raw.replace(/^"|"$/g, "");
+  const program = unquote(tokens[0] ?? "");
+  if (!program) return false;
+  if (/[\\/]/.test(program) && !exists(program)) return false;
+  for (const raw of tokens.slice(1)) {
+    const candidate = unquote(raw);
     if (!/\.(m|c)?js$|\.exe$/i.test(candidate)) continue;
-    checked += 1;
-    if (!existsSync(candidate)) return false;
+    if (!exists(candidate)) return false;
   }
-  // A bare `node cli.js` form on POSIX has no .exe to check; the .js still counted.
-  if (checked > 0) return true;
-  // The signed single executable on macOS or Linux (`"/…/scopebond-agent" hook claude`) has no extension: the program
-  // itself must exist.
-  const program = (tokens[0] ?? "").replace(/^"|"$/g, "");
-  return /[\\/]/.test(program) ? existsSync(program) : true;
+  return true;
 }
 
 /** Remove the user-level home (keys, policy, receipts). */

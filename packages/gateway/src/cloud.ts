@@ -1,5 +1,6 @@
 // Optional gateway → Scopebond Cloud exporter. The gateway stores locally first;
-// a bounded outbox then retries evidence-v1 receipts without weakening execution.
+// an outbox (bounded by the limits it is opened with; a record past one is kept as a gap)
+// then retries evidence-v1 receipts without weakening execution.
 
 import { canonical, sha256 } from "./crypto.js";
 import { isSignedChainHead, type SignedChainHead } from "@scopebond/verify/chain";

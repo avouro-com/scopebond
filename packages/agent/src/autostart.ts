@@ -94,9 +94,19 @@ exec ${q(node)} run
 # Scopebond Agent launcher: finds Node and the agent each time, so a Node upgrade never stops it.
 NODE=${q(node)}
 if [ ! -x "$NODE" ]; then
+  # The recorded Node is gone (a version manager removed that version): the version managers' default Node first, as
+  # a login shell would find it, then one installed outside them. launchd and systemd start this with a short PATH.
   [ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1
   NODE="$(command -v node 2>/dev/null)"
-  for candidate in /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node; do
+  for candidate in \
+    "\${FNM_DIR:-\${XDG_DATA_HOME:-$HOME/.local/share}/fnm}/aliases/default/bin/node" \
+    "$HOME/Library/Application Support/fnm/aliases/default/bin/node" \
+    "$HOME/.fnm/aliases/default/bin/node" \
+    "\${VOLTA_HOME:-$HOME/.volta}/bin/node" \
+    "\${MISE_DATA_DIR:-\${XDG_DATA_HOME:-$HOME/.local/share}/mise}/shims/node" \
+    "\${ASDF_DATA_DIR:-$HOME/.asdf}/shims/node" \
+    "$HOME/.nodenv/shims/node" \
+    /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node; do
     [ -n "$NODE" ] && break
     [ -x "$candidate" ] && NODE="$candidate"
   done

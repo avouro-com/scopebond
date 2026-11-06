@@ -44,7 +44,7 @@ export type { ToolId, ToolReport, McpServerReport, ToolDiscovery, DiscoveryOptio
 export { setupPlan, otherWorkspace, workspaceFlag, agentOnThisComputer, globalBinDir, onPath, addToPathCommand, nodeSupported, runSetup } from "./setup.js";
 export type { SetupState, SetupStep, SetupOptions } from "./setup.js";
 export {
-  installKind, MAC_PACKAGE_EXE, MAC_TRAY_APP, updaterKeys, keyId, verifyManifest, fetchVerifiedInstaller, installerName, installerUnchanged, installerRecheckScript,
+  installKind, MAC_PACKAGE_EXE, MAC_PACKAGE_BIN, MAC_PACKAGE_LINK, MAC_MOVE_ENTRIES_COMMAND, MAC_TRAY_APP, updaterKeys, keyId, verifyManifest, fetchVerifiedInstaller, installerName, installerUnchanged, installerRecheckScript,
   windowsTool, installHelper, nativeTrayPath, takeInstallResult, INSTALLER_CHECK_SCRIPT, INSTALL_RESULT, MANIFEST_DOMAIN, PUBLISHER,
   updatesDir, msiLogPath, helperCopyPath, removeOldHelpers, UPDATE_HELPER_COMMAND, UPDATE_PENDING_FILE, UPDATE_PENDING_MS, writeUpdatePending, readUpdatePending, clearUpdatePending,
 } from "./native-update.js";
@@ -68,6 +68,6 @@ export {
 export { maintainIntel, readIntelTarget, COMPONENT_SIGNATURE_HEADER, COMPONENT_KEY_ID_HEADER, type IntelTarget, type IntelOutcome, type IntelInstallOptions } from "./intel-install.js";
 export {
   MAC_UPDATER_LABEL, MAC_UPDATER_COMMAND, MAC_UPDATER_PLIST, MAC_UPDATER_EXE, MAC_UPDATER_PATHS, readRequest, MAC_INSTALLER_PUBLISHER, macPackageName, macAutoUpdate, macPackageSignature,
-  requestMacUpdate, readMacUpdateResult, takeMacUpdateResult, runMacUpdater, hasMacUpdater,
+  requestMacUpdate, readMacUpdateResult, takeMacUpdateResult, runMacUpdater, hasMacUpdater, holdMacUpdates, takeRequests, macAgentHealth, startAgentsAgain, signedInUids, MAC_HOLD_FRESH_MS,
 } from "./mac-update.js";
 export type { MacUpdaterPaths, MacUpdaterOptions } from "./mac-update.js";

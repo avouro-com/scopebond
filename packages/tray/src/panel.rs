@@ -125,6 +125,18 @@ pub fn block_button(block: &RecentBlock) -> Option<&'static str> {
 /// The Help page "Get help…" opens.
 pub const HELP_URL: &str = "https://scopebond.com/documentation";
 
+/// The program that opens a web address in the person's default browser: Explorer on Windows, macOS's own `open` by its
+/// full path, and `xdg-open` elsewhere. The address is its only argument.
+pub fn url_opener() -> &'static str {
+    if cfg!(windows) {
+        "explorer.exe"
+    } else if cfg!(target_os = "macos") {
+        "/usr/bin/open"
+    } else {
+        "xdg-open"
+    }
+}
+
 /// Field names a support report never carries, whatever the agent sends: keys, credentials, records, commands and reasons.
 const PRIVATE_FIELDS: [&str; 14] = [
     "key", "private_key", "secret", "token", "credential", "password", "reason", "command", "action_text", "summary", "what",
@@ -385,6 +397,9 @@ mod tests {
         assert_eq!(down["agent"], Value::Null);
         assert_eq!(down["agent_error"], "the agent did not answer");
         assert!(HELP_URL.starts_with("https://scopebond.com/"));
+        // The Help page opens with the platform's own opener (explorer.exe does not exist on a Mac).
+        let expected = if cfg!(windows) { "explorer.exe" } else if cfg!(target_os = "macos") { "/usr/bin/open" } else { "xdg-open" };
+        assert_eq!(url_opener(), expected);
     }
 
     #[test]

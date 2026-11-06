@@ -885,8 +885,10 @@ export interface SqliteCloudOutboxOptions {
   busyTimeoutMs?: number;
 }
 
-/** Durable, bounded Cloud delivery queue. Rejections and expiry are retained as
- * explicit gap rows so a local receipt never disappears without evidence. */
+/** Durable Cloud delivery queue, bounded only by the limits it is opened with (count, bytes and age; the defaults are
+ * 10,000 records, 64 MiB and 7 days, and the hook opens it with no count or age limit and a 512 MiB size limit).
+ * Rejections, expiry and records refused at a limit are retained as explicit gap rows so a local receipt never
+ * disappears without evidence. */
 export class SqliteCloudOutbox implements CloudOutbox {
   private readonly db: SqliteDb;
   private readonly maxPending: number;

@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadConnection } from "./cloud.js";
 import { readDeliveryState, waitingUntil } from "./delivery-state.js";
-import { deliveryStalled, queueStatus } from "./delivery-report.js";
+import { deliveryStalled, queueFullness, queueStatus } from "./delivery-report.js";
 import { readSignatureState, type SignatureMode, type SignatureState } from "./policy-signature.js";
 import { signatureModeAt } from "./policy-next-key.js";
 import { samePath } from "./install.js";
@@ -28,6 +28,9 @@ export interface StatusJson {
     last_error_code: string | null;
     connection_refused_since: number | null;
     pending: number;
+    /** The size of the records waiting, in bytes, and whether the queue is full (new records then stay in the log only). */
+    pending_bytes: number;
+    queue_full: boolean;
     oldest_pending_age_s: number | null;
     /** Records that missed normal delivery, by reason, over the queue's lifetime (not only its retained gap rows). */
     gaps_by_reason: Record<string, number>;
@@ -69,7 +72,9 @@ export function buildStatusJson(input: {
   const dir = input.activeDir;
   const connection = loadConnection(dir);
   const state = readDeliveryState(dir);
-  const { pending, oldest, error: queueError, gapsTotal, gapsByReason } = queueStatus(dir);
+  const { pending, oldest, error: queueError, gapsTotal, gapsByReason, bytes } = queueStatus(dir);
+  // A full queue keeps new receipts in this computer's log only.
+  const full = !queueError && queueFullness(bytes) === "full";
   const code = /\(([a-z_]+)\)/.exec(state.last_error ?? "")?.[1] ?? (state.last_status ? `http_${state.last_status}` : null);
   const governing = input.hasPolicy && (input.agents.claude || input.agents.cursor || input.agents.codex || input.agents.copilot === true);
   // Stuck with a known error for an hour, or stalled: nothing accepted since the oldest waiting
@@ -77,7 +82,7 @@ export function buildStatusJson(input: {
   const stuck = (pending > 0 && oldest !== null && now - oldest > STUCK_AFTER_MS && state.last_error !== null)
     || deliveryStalled(state, pending, oldest, now);
   const overall: StatusJson["state"] = !governing ? "not_governing"
-    : !connection || state.invalid_since !== null || stuck || queueError ? "recording_locally" : "delivering";
+    : !connection || state.invalid_since !== null || stuck || queueError || full ? "recording_locally" : "delivering";
   return {
     schema: STATUS_SCHEMA,
     version: input.version,
@@ -93,6 +98,8 @@ export function buildStatusJson(input: {
       queue_error: queueError ?? null,
       connection_refused_since: state.invalid_since,
       pending,
+      pending_bytes: bytes,
+      queue_full: full,
       oldest_pending_age_s: oldest !== null ? Math.max(0, Math.round((now - oldest) / 1000)) : null,
       gaps_by_reason: gapsByReason,
       gaps_total: gapsTotal,

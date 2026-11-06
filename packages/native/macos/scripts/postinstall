@@ -1,13 +1,17 @@
 #!/bin/sh
-# After the package's files are in place: the updater's folders and its LaunchDaemon, then the agent started now for each
-# person signed in to this Mac (launchd starts it from /Library/LaunchAgents at every later sign-in). A person for whom
-# launchd has the label disabled stays without it. An install with nobody signed in (a management tool at the login
-# window) starts it at the next sign-in. Nothing here ever fails the install.
+# After the package's files are in place: the updater's folders and its LaunchDaemon, the PATH link to the executable and
+# the hook entries moved to it, then the agent started now for each person signed in to this Mac (launchd starts it from
+# /Library/LaunchAgents at every later sign-in). A person for whom launchd has the label disabled stays without it. An
+# install with nobody signed in (a management tool at the login window) starts it at the next sign-in. Nothing here ever
+# fails the install.
 LABEL=com.scopebond.agent
 PLIST="/Library/LaunchAgents/$LABEL.plist"
 TRAY_PLIST=/Library/LaunchAgents/com.scopebond.tray.plist
 UPDATER=com.scopebond.updater
 SUPPORT="/Library/Application Support/Scopebond"
+BIN="$SUPPORT/bin"
+EXE="$BIN/scopebond-agent"
+LINK=/usr/local/bin/scopebond-agent
 
 # Requests from people's agents: anyone may leave one, nobody but root reads or removes another's (sticky, no read).
 /bin/mkdir -p "$SUPPORT/update-requests" "$SUPPORT/updater"
@@ -32,6 +36,27 @@ if root_only / /Library /Library/PrivilegedHelperTools "$HELPER" /Library/Launch
 else
   echo "Scopebond: the updater was not started: $HELPER or a folder above it can be changed by someone other than root." >&2
 fi
+
+# The executable everything the package starts runs (the LaunchAgent, every hook entry, the menu-bar app): in root's own
+# folder, so nobody else can replace it. /usr/local/bin, where releases before kept it, can belong to a person.
+/usr/sbin/chown root:wheel "$BIN" "$EXE"
+/bin/chmod 0755 "$BIN" "$EXE"
+if ! root_only / /Library "/Library/Application Support" "$SUPPORT" "$BIN" "$EXE"; then
+  echo "Scopebond: $EXE or a folder above it can be changed by someone other than root." >&2
+fi
+# On PATH for a new terminal: a link, which replaces the executable an earlier release put there. Nothing runs the link.
+/bin/mkdir -p /usr/local/bin
+[ -d "$LINK" ] && [ ! -L "$LINK" ] || /bin/ln -sfh "$EXE" "$LINK" 2>/dev/null || true
+
+# Hook entries an earlier release wrote name the link's path: moved to the executable, as each person (their agent does
+# the same when it starts; this reaches the people not signed in now).
+/usr/bin/dscl . -list /Users NFSHomeDirectory 2>/dev/null | while read -r person home; do
+  case "$person" in ''|_*|root|daemon|nobody) continue ;; esac
+  [ -d "$home" ] && [ ! -L "$home" ] || continue
+  if /usr/bin/grep -qsF "$LINK" "$home/.claude/settings.json" "$home/.cursor/hooks.json" "$home/.codex/hooks.json" "$home/.copilot/hooks/scopebond.json"; then
+    /usr/bin/sudo -H -u "$person" "$EXE" move-hook-entries </dev/null >/dev/null 2>&1 || true
+  fi
+done
 
 for uid in $(/bin/ps -axo uid=,comm= | /usr/bin/awk '$1 != 0 && $2 ~ /\/loginwindow$/ { print $1 }' | /usr/bin/sort -u); do
   /bin/launchctl bootstrap "gui/$uid" "$PLIST" 2>/dev/null || true

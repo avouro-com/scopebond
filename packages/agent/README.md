@@ -86,8 +86,9 @@ Node.js nor npm: one signed program is both the agent and the hook, and the Scop
 
 ## macOS: the installer package
 
-The same executable in a macOS installer package (`packages/native`, `build-pkg.mjs`): `/usr/local/bin/scopebond-agent`
-for every user of the Mac, and a LaunchAgent that runs `scopebond-agent run` as each person who signs in (the agent's own
+The same executable in a macOS installer package (`packages/native`, `build-pkg.mjs`):
+`/Library/Application Support/Scopebond/bin/scopebond-agent` (root's own folder; `/usr/local/bin/scopebond-agent` is a
+link to it for PATH) for every user of the Mac, and a LaunchAgent that runs `scopebond-agent run` as each person who signs in (the agent's own
 autostart label, so it never runs twice). It counts as installed for every user.
 
 - **Updates.** The package carries an updater that runs as root (the LaunchDaemon `com.scopebond.updater`). When the
@@ -120,7 +121,7 @@ too.
   agent signs in to Scopebond Cloud.
 - **From an npm install.** When the package's agent starts (or `setup` runs) and finds the agent installed with npm, it
   takes over first: the npm agent is asked to stop, its LaunchAgent in `~/Library/LaunchAgents` and its launcher go
-  (autostart becomes the package's LaunchAgent), and every Scopebond hook entry runs `/usr/local/bin/scopebond-agent`.
+  (autostart becomes the package's LaunchAgent), and every Scopebond hook entry runs `/Library/Application Support/Scopebond/bin/scopebond-agent`.
   The npm package stays where npm put it; the agent says once, and `status` keeps saying while it is there, that
   `npm uninstall -g @scopebond/agent` removes it.
 - **The menu-bar app.** The package also installs `/Applications/Scopebond.app` (`packages/tray`): the icon, menu,

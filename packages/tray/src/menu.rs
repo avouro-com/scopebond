@@ -202,8 +202,13 @@ pub fn menu_spec(answer: Option<&TrayAnswer>, ctx: &MenuContext) -> Vec<Entry> {
     out
 }
 
-/// What the tray says when its icon is hidden: Scopebond keeps protecting, and how to bring the icon back.
+/// What the tray says when its icon is hidden: Scopebond keeps protecting, and how to bring the icon back. On Windows the
+/// Start-menu entry starts the tray again (the single-instance plugin shows the icon); on macOS opening Scopebond from
+/// Applications reopens the running app, which shows the icon (RunEvent::Reopen).
+#[cfg(not(target_os = "macos"))]
 pub const HIDDEN_ICON_TEXT: &str = "Scopebond keeps protecting this computer. To show the icon again, open Scopebond from the Start menu.";
+#[cfg(target_os = "macos")]
+pub const HIDDEN_ICON_TEXT: &str = "Scopebond keeps protecting this Mac. To show the icon again, open Scopebond from your Applications folder.";
 
 /// What the item with this id does now. An action the model no longer offers (it changed since the menu was drawn) does
 /// nothing, so a menu item can only ever call what the agent offers at that moment.
@@ -326,7 +331,12 @@ mod tests {
         let disconnected = labels(&menu_spec(Some(&answer(fixtures::DISCONNECTED)), &ctx(AgentLink::Answering)));
         assert_eq!(&disconnected[..3], ["Open Scopebond", "Reconnect…", "-"], "the must-act fix");
         assert!(!disconnected.iter().any(|l| l.contains("Scopebond Cloud")), "no Cloud item when the model offers no page");
-        assert!(HIDDEN_ICON_TEXT.contains("Start menu"));
+        // Each platform names the way back that exists there: there is no Start menu on a Mac.
+        if cfg!(target_os = "macos") {
+            assert!(!HIDDEN_ICON_TEXT.contains("Start menu") && HIDDEN_ICON_TEXT.contains("Applications"), "{HIDDEN_ICON_TEXT}");
+        } else {
+            assert!(HIDDEN_ICON_TEXT.contains("Start menu"));
+        }
     }
 
     #[test]
