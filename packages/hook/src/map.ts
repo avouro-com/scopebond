@@ -8,7 +8,7 @@
 // map to a single intent (a one-element array), or one per spelling of an
 // ambiguous Windows short path.
 
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { accountHome } from "./env-trust.js";
 import { posix } from "node:path";
 import { digest, keyedDigest, redactCommand, scrubParam, scrubSecrets, scrubUrlPath } from "./minimize.js";
@@ -356,6 +356,34 @@ const READERS = new Set([
 const EDITORS = new Set(["vi", "vim", "nvim", "ex", "ed", "nano", "pico", "emacs", "micro", "joe", "kak", "hx", "helix", "mcedit"]);
 // Programs that copy or move: sources are read, the destination is written; `mv`
 // also removes its sources, so they are writes too.
+/** The last part of a path as written (`a/b/settings.json` → `settings.json`), trailing separators ignored; "" for none. */
+function baseName(path: string): string {
+  let end = path.length;
+  while (end > 0 && (path[end - 1] === "/" || path[end - 1] === "\\")) end--;
+  const start = Math.max(path.lastIndexOf("/", end - 1), path.lastIndexOf("\\", end - 1)) + 1;
+  const name = path.slice(start, end);
+  return name === "." || name === ".." ? "" : name;
+}
+/** Whether a copy's destination is a folder: written with a trailing separator, only known at run time (a variable or a
+ *  pattern: judged as one, to be safe), or a folder on this computer now. A plain file destination (`cp a ~/backup.txt`) is not. */
+function isFolderTarget(dest: string, dir: string, cwd?: string): boolean {
+  if (/[\\/]$/.test(dest)) return true;
+  if (/[$*?[`%]/.test(dest)) return true;
+  let p = expandHome(dest);
+  if (p === "~" || p.startsWith("~/")) p = accountHome() + p.slice(1);
+  else if (!/^(?:\/|[A-Za-z]:)/.test(p)) p = `${cwd ?? process.cwd()}/${dir ? `${trimEnd(dir)}/` : ""}${p}`;
+  try { return statSync(p).isDirectory(); } catch { return false; }
+}
+/** The folders a copy names with `-t DIR`, `--target-directory DIR`, `--target-directory=DIR` or `-Destination DIR`. */
+function targetDirectories(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (/^--target-directory=/.test(a)) out.push(a.slice("--target-directory=".length));
+    else if (/^(?:-t|--target-directory|-destination)$/i.test(a) && args[i + 1] !== undefined) out.push(args[i + 1]);
+  }
+  return out;
+}
 const COPIERS = new Set(["cp", "mv", "rsync", "scp", "install", "ln", "copy-item", "cpi", "copy", "move-item", "mi", "move", "robocopy", "xcopy", "rename-item", "ren"]);
 const MOVERS = new Set(["mv", "move-item", "mi", "move", "rename-item", "ren"]);
 // Programs whose operands are files they WRITE (or whose metadata they change).
@@ -986,6 +1014,14 @@ function fileOpsFromShell(sc: SimpleCommand, dir: string, cwd?: string): { ops: 
     sources.forEach(read);
     if (MOVERS.has(prog)) sources.forEach((s) => { write(s); remove(s, true); });
     if (!hasTarget) write(operands[operands.length - 1]);
+    // A destination that is a folder receives each source under its own name: `cp settings.json ~/.claude/` writes
+    // `~/.claude/settings.json`, which the folder's path alone never shows. Whether the destination is a folder is only known
+    // at run time, so the name it would hold there is judged as well (the floor's file names are then seen as written).
+    const destinations = hasTarget ? targetDirectories(args) : [operands[operands.length - 1]].filter((d) => isFolderTarget(d, dir, cwd));
+    for (const d of destinations) for (const src of sources) {
+      const name = baseName(src);
+      if (d && name) write(`${trimEnd(d)}/${name}`);
+    }
     // `rsync --delete SRC/ DEST` removes what DEST holds beyond SRC: a removal of DEST's contents.
     if (prog === "rsync" && !hasTarget && args.some((x) => x === "--del" || x === "--delete" || /^--delete-[a-z]+$/.test(x))) remove(operands[operands.length - 1], true);
   } else if (DELETERS.has(prog)) {
