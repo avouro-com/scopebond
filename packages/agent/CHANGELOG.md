@@ -1,5 +1,13 @@
 # @scopebond/agent
 
+## 0.13.1
+
+### Patch Changes
+
+- 947612d: The macOS updater goes down the versions asked for, newest first, until one is published and checks out, so a request for a release that does not exist never stops a real update.
+- Updated dependencies [591dcc3]
+  - @scopebond/hook@0.33.1
+
 ## 0.13.0
 
 ### Minor Changes
