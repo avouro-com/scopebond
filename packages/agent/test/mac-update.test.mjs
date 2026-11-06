@@ -270,3 +270,31 @@ test("health: the installed executable reports the version and each person's age
   assert.match(old, /reports "agent\/9\.9\.8 hook\/1\.0\.0", not agent\/9\.9\.9/);
   assert.equal(await macAgentHealth("9.9.9", { exe: "/x", reports: () => "agent/9.9.9 hook/1.0.0", uids: () => [], deadlineMs: 0, sleep }), null, "nobody signed in: the program is enough");
 });
+
+test("a request for a release that does not exist does not stand in the way of a real one", async () => {
+  const paths = updater();
+  const k = keys();
+  const r = release(k);
+  requestMacUpdate("99.0.0", 503, paths);
+  requestMacUpdate("98.0.0", 503, paths);
+  requestMacUpdate(NEW, 501, paths);
+  const { done, install } = installs();
+  const lines = [];
+  const result = await runMacUpdater({ paths, running: "1.0.0", autoUpdate: () => true, fetchImpl: r.fetchImpl, publicKey: k.pub, check: () => ({ valid: true, subject: AVOURO }), install, health: async () => null, startAgain: () => {}, log: (l) => lines.push(l) });
+  assert.equal(result?.installed, true, result?.reason ?? "");
+  assert.equal(result.version, NEW, "the newest release that exists");
+  assert.deepEqual(done, [pkg]);
+  assert.ok(lines.some((l) => /skipped the Scopebond Agent 99\.0\.0/.test(l)), "the made-up version is logged as skipped");
+});
+
+test("when no requested release exists, nothing is installed and every refusal is recorded", async () => {
+  const paths = updater();
+  const k = keys();
+  const r = release(k);
+  requestMacUpdate("99.0.0", 503, paths);
+  const { done, install } = installs();
+  const result = await runMacUpdater({ paths, running: "1.0.0", autoUpdate: () => true, fetchImpl: r.fetchImpl, publicKey: k.pub, check: () => ({ valid: true, subject: AVOURO }), install, health: async () => null, startAgain: () => {}, log: () => {} });
+  assert.equal(result?.installed, false);
+  assert.match(result.reason, /^99\.0\.0: /);
+  assert.deepEqual(done, []);
+});

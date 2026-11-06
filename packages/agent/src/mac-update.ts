@@ -244,6 +244,9 @@ export async function macAgentHealth(version: string, o: { exe?: string; deadlin
   }
 }
 
+/** How many requested versions one run tries, newest first, before giving up (each is a download and a check). */
+const MAX_CANDIDATES = 5;
+
 /** One run of the updater (as root): take the requests, install the newest signed release asked for, check that the new
  *  agent runs (else install the one before again), record the result. Returns the result it recorded, or null when there
  *  was nothing to do. */
@@ -252,8 +255,13 @@ export async function runMacUpdater(o: MacUpdaterOptions = {}): Promise<InstallR
   const log = o.log ?? ((line: string) => console.log(`${new Date().toISOString()} ${line}`));
   const now = o.now ?? Date.now;
   const running = o.running ?? agentVersion();
-  const asked = takeRequests(paths.requests, log).sort(compareVersions).at(-1);
-  if (!asked || compareVersions(asked, running) <= 0) return null;
+  // Every version asked for that is newer than the one running, newest first, at most MAX_CANDIDATES of them. Anyone on the
+  // Mac can write a request, so the newest one may name a release that does not exist ("99.0.0"): the updater goes down the
+  // list until one is published and checks out, so a made-up version never stands in the way of a real one.
+  const candidates = [...new Set(takeRequests(paths.requests, log))].filter((v) => compareVersions(v, running) > 0)
+    .sort(compareVersions).reverse().slice(0, MAX_CANDIDATES);
+  let asked = candidates[0];
+  if (!asked) return null;
   const record = (installed: boolean, reason: string | null, exitCode: number | null): InstallResult => {
     const result: InstallResult = { at: new Date(now()).toISOString(), version: asked, installed, reason, exit_code: exitCode, log: null };
     try { writeFileSync(paths.result, `${JSON.stringify(result)}\n`, { mode: 0o644 }); chmodSync(paths.result, 0o644); } catch { /* the asking agent times out and tries again */ }
@@ -267,11 +275,18 @@ export async function runMacUpdater(o: MacUpdaterOptions = {}): Promise<InstallR
   const install = o.install ?? ((file: string) => spawnSync("/usr/sbin/installer", ["-pkg", file, "-target", "/"], { stdio: "inherit", timeout: 15 * 60_000 }).status);
   const health = o.health ?? ((version: string) => macAgentHealth(version));
   const startAgain = o.startAgain ?? (() => startAgentsAgain());
-  const verified = await fetchVerifiedInstaller(asked, {
-    dir: paths.work, name: macPackageName(asked), publisher: MAC_INSTALLER_PUBLISHER, check,
-    fetchImpl: o.fetchImpl, base: o.base, publicKey: o.publicKey, now: now(),
-  });
-  if (!verified.ok) return record(false, verified.reason, null);
+  let verified: Awaited<ReturnType<typeof fetchVerifiedInstaller>> | undefined;
+  const refused: string[] = [];
+  for (const version of candidates) {
+    const got = await fetchVerifiedInstaller(version, {
+      dir: paths.work, name: macPackageName(version), publisher: MAC_INSTALLER_PUBLISHER, check,
+      fetchImpl: o.fetchImpl, base: o.base, publicKey: o.publicKey, now: now(),
+    });
+    if (got.ok) { asked = version; verified = got; break; }
+    refused.push(`${version}: ${got.reason}`);
+    log(`skipped the Scopebond Agent ${version}: ${got.reason}`);
+  }
+  if (!verified || !verified.ok) return record(false, refused.join("; "), null);
   // The package of the release that installed fine last time, kept for going back (root's own folder).
   const kept = join(paths.work, "installed");
   let keep = false;
