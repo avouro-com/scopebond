@@ -1823,7 +1823,15 @@ const programName = (word: string): string => {
   const base = word.slice(Math.max(word.lastIndexOf("/"), word.lastIndexOf("\\")) + 1).toLowerCase().replace(/\.exe$/, "");
   return /^python[0-9.]*$/.test(base) ? "python" : base;
 };
-const wordsOf = (text: string): string[] => text.split(/\s+/).filter(Boolean).map((w) => w.replace(/^["'(]+|["')]+$/g, ""));
+/** `w` without the quotes and brackets around it, by a scan (a pattern anchored at the end is quadratic on a run of quotes). */
+const unwrapWord = (w: string): string => {
+  let start = 0;
+  let end = w.length;
+  while (start < end && (w[start] === '"' || w[start] === "'" || w[start] === "(")) start++;
+  while (end > start && (w[end - 1] === '"' || w[end - 1] === "'" || w[end - 1] === ")")) end--;
+  return w.slice(start, end);
+};
+const wordsOf = (text: string): string[] => text.split(/\s+/).filter(Boolean).map(unwrapWord);
 /** A pipeline stage that decodes: `base64 -d`, `xxd -r -p`, `openssl enc -d -base64`, `uudecode`. */
 function decodesStage(stage: string): boolean {
   const words = wordsOf(stage);
@@ -1875,7 +1883,7 @@ export function runsDecodedCode(command: string): boolean {
   // An interpreter given code on the command line that decodes and runs: `python3 -c 'exec(bytes.fromhex(…))'`.
   const raw = command.split(/\s+/);
   const lower = command.toLowerCase();
-  const interpreterCode = raw.some((w, i) => CODE_INTERPRETERS.has(programName(w.replace(/^["'(]+/, ""))) && raw.slice(i + 1, i + 8).some((f) => CODE_FLAGS.has(f)));
+  const interpreterCode = raw.some((w, i) => CODE_INTERPRETERS.has(programName(unwrapWord(w))) && raw.slice(i + 1, i + 8).some((f) => CODE_FLAGS.has(f)));
   if (!interpreterCode) return false;
   const buffer = lower.includes("buffer.from(") && /['"](?:base64|hex|base64url)['"]/.test(lower);
   return (buffer || CODE_DECODES.some((d) => lower.includes(d))) && CODE_RUNS.some((r) => lower.includes(r));
