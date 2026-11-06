@@ -1845,7 +1845,7 @@ function runsStage(stage: string): boolean {
   return RUNNERS.has(program) || program === "python";
 }
 const CODE_DECODES = ["b64decode", "b32decode", "a85decode", "fromhex", "unhexlify", "decodebytes", "codecs.decode", "atob(", "mime::base64", "decode_base64", "base64_decode", "hex2bin", "str_rot13", "zlib.decompress", "inflatesync", "gunzipsync", "pack(\"h", "pack('h", "unpack(\"m", "unpack('m", "unpack1(\"m", "unpack1('m"];
-const CODE_RUNS = ["exec", "eval", "compile(", "system", "popen", "spawn", "execsync", "execfile", "function(", "subprocess", "os.", "writefile", "open(", "import(", "require("];
+const CODE_RUNS = ["exec", "eval", "compile(", "system", "popen", "spawn", "execsync", "execfile", "function(", "subprocess", "os.", "writefile", "open(", "__import__", "require("];
 
 /** Whether the command line runs code that it decodes first. Exported for tests. */
 export function runsDecodedCode(command: string): boolean {
