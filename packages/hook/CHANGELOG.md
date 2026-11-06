@@ -1,5 +1,11 @@
 # @scopebond/hook
 
+## 0.33.1
+
+### Patch Changes
+
+- 591dcc3: A copy or move into a folder (`cp`, `mv`, `install`, `rsync`, `cp -t`) is judged by the file it writes there as well as by the folder: `cp settings.json ~/.claude/` is checked as `~/.claude/settings.json`.
+
 ## 0.33.0
 
 ### Minor Changes
