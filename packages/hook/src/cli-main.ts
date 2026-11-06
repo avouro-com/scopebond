@@ -1300,6 +1300,21 @@ async function reportChains(dir: string, anchors: string[], segmentsDir: string 
   return report.ok;
 }
 
+/** A runtime over a copy of the rules at `policyPath` with every clause in Block, its store in `tmp`; null when that copy cannot be
+ *  made or loaded (signed rules from a workspace, an unreadable file). Used only by `test` to say what Monitor rules would stop. */
+function monitorAsBlock(policyPath: string, dir: string, tmp: string): ReturnType<typeof createHookRuntime> | null {
+  try {
+    const policy = JSON.parse(readFileSync(policyPath, "utf8")) as { clauses?: Array<Record<string, unknown>> };
+    if (!Array.isArray(policy.clauses)) return null;
+    for (const c of policy.clauses) if (c && c.mode === "monitor") c.mode = "enforce";
+    const copy = join(tmp, "policy-blocking.json");
+    writeFileSync(copy, JSON.stringify(policy));
+    return createHookRuntime({
+      policyPath: copy, keyPath: join(dir, "agent.key"), attesterPath: join(dir, "attester.key"), dbPath: join(tmp, "receipts-blocking.db"),
+    });
+  } catch { return null; }
+}
+
 async function runTest(args: string[]): Promise<void> {
   const command = args.find((a) => !a.startsWith("-"));
   if (!command) { console.error('usage: scopebond-hook test "<shell command>"'); process.exit(1); }
@@ -1315,19 +1330,29 @@ async function runTest(args: string[]): Promise<void> {
       strict: process.argv.includes("--strict"),
     });
     activatePacks(dir);
+    // The same rules with every Monitor rule switched to Block, so an action a monitored rule would stop says so: rules start in
+    // Monitor, and "allow" alone would hide what Scopebond is watching for. Unavailable (null) when the rules cannot be read.
+    const blocking = monitorAsBlock(join(dir, "policy.json"), dir, tmp);
     const mapped = fillPushBranch(mapClaudeToolUse({ tool_name: "Bash", tool_input: { command } }), currentBranch(process.cwd()), () => upstreamBranch(process.cwd()));
     console.log(`command: ${command}`);
+    let wouldBlock = false;
     for (const m of mapped) {
       const d = await runtime.evaluateOne(m);
       // One tidy row per action. A deny's full explanation is multi-line, so the
       // row carries only the deciding rule and the whole message is printed once,
       // below — exactly as the agent will receive it.
-      const note = d.decision === "deny" ? (d.clauseId ? `rule "${d.clauseId}"` : "")
+      let note = d.decision === "deny" ? (d.clauseId ? `rule "${d.clauseId}"` : "")
         : d.decision === "not_evaluated" ? d.reason : "";
+      if (d.decision === "allow" && blocking) {
+        const b = await blocking.evaluateOne(m).catch(() => null);
+        if (b?.decision === "deny") { wouldBlock = true; note = `Monitor: would block (rule "${b.clauseId ?? "?"}")`; }
+      }
       console.log(`  ${describeIntent({ intent: m.intent }).padEnd(28)} → ${d.decision.padEnd(14)}${note}`);
     }
+    blocking?.close();
     const overall = await runtime.evaluate(mapped);
     console.log(`\noverall: ${overall.decision}`);
+    if (overall.decision !== "deny" && wouldBlock) console.log(`A rule in Monitor records this as out of policy; switch it to Block with \`${cliCommand("rules")}\`.`);
     if (overall.decision === "deny" && overall.reason) console.log(`\n${overall.reason}`);
     process.exit(overall.decision === "deny" ? 2 : 0);
   } finally {

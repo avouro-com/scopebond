@@ -17,6 +17,8 @@ for (const [command, flags] of [["init", ["--yes", "--npx"]], ["install", []]]) 
     const output = execFileSync(process.execPath, [cli, command, ...flags, "--cursor", "--no-install"], {
       cwd: project, encoding: "utf8", env,
     });
+    assert.match(output, /See it work\. Rules start in Monitor/);
+    assert.match(output, /test "git push --force origin main"/);
     assert.match(output, /Start free with one agent: https:\/\/cloud\.scopebond\.com\/app/);
     assert.match(output, /login https:\/\/cloud\.scopebond\.com --cursor/);
     if (command === "init") assert.match(output, /--cursor --project/);

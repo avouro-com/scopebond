@@ -17,7 +17,12 @@ export function onboardingSteps(options: {
 }): string[] {
   const platform = options.platform ?? process.platform;
   const native = options.native ?? isSingleExecutable();
-  const lines: string[] = [];
+  const lines: string[] = [
+    "See it work. Rules start in Monitor: they record what they would block. Try one, then see what your agent did:",
+    `  ${options.command('test "git push --force origin main"')}`,
+    `  ${options.command("log")}`,
+    `Switch a rule to Block with ${options.command("rules")}.`,
+  ];
   if (!options.connected) {
     const flag = options.harness === "claude" ? "" : ` --${options.harness}`;
     lines.push(
