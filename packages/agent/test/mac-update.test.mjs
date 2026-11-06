@@ -165,7 +165,7 @@ test("a request file is read only when it is itself a small regular file", async
   assert.doesNotMatch(plist, /\/usr\/local\/bin/);
 });
 
-// The requests folder is writable by everyone: whatever is put there under a request's or a hold's name (a directory, a
+// The requests folder is writable by everyone: whatever is put there under a request's name (a directory, a
 // link, a pipe) is skipped and logged, never read, and never stops the root updater. Before, a directory named like a
 // request made it throw on every run, so no update ever installed again.
 test("a directory, a link or a pipe named like a request does not stop the updater", async () => {
@@ -173,7 +173,6 @@ test("a directory, a link or a pipe named like a request does not stop the updat
   const k = keys();
   const r = release(k);
   mkdirSync(join(paths.requests, "501-0123456789abcdef.json"));
-  mkdirSync(join(paths.requests, `${process.getuid?.() ?? 0}-hold.json`));
   if (process.platform !== "win32") {
     spawnSync("mkfifo", [join(paths.requests, "502-0123456789abcdef.json")]);
     try { symlinkSync("/etc/hosts", join(paths.requests, "503-0123456789abcdef.json")); } catch { /* no links here */ }
@@ -185,54 +184,8 @@ test("a directory, a link or a pipe named like a request does not stop the updat
   assert.equal(result?.installed, true, result?.reason ?? "");
   assert.deepEqual(done, [pkg]);
   assert.ok(lines.some((l) => /skipped 501-0123456789abcdef\.json .*not a regular file/.test(l)), lines.join("\n"));
-  assert.ok(lines.some((l) => /-hold\.json .*not a regular file/.test(l)), "a directory under a hold's name holds nothing");
   // Run again: still nothing throws, and the directory is still only skipped.
   assert.equal(await runMacUpdater({ paths, running: NEW, autoUpdate: () => true, log: () => {} }), null);
-});
-
-test("a workspace's hold holds the root updater for everyone on the Mac; an old or someone else's hold does not", async (t) => {
-  if (process.platform === "win32") return t.skip("macOS only");
-  const { holdMacUpdates, MAC_HOLD_FRESH_MS } = await import("../dist/index.js");
-  const uid = process.getuid();
-  const k = keys();
-  const run = async (paths, over = {}) => {
-    const r = release(k);
-    const { done, install } = installs();
-    const result = await runMacUpdater({ paths, running: "1.0.0", autoUpdate: () => true, fetchImpl: r.fetchImpl, publicKey: k.pub, check: () => ({ valid: true, subject: AVOURO }), install, health: async () => null, startAgain: () => {}, log: () => {}, ...over });
-    return { result, done, calls: r.calls };
-  };
-  const paths = updater();
-  assert.equal(holdMacUpdates(true, uid, paths), null);
-  requestMacUpdate(NEW, uid + 1, paths); // another person asks
-  const held = await run(paths);
-  assert.equal(held.result.installed, false);
-  assert.match(held.result.reason, /held by the Scopebond workspace/);
-  assert.equal(held.calls.length, 0, "nothing downloaded");
-  assert.deepEqual(held.done, []);
-  assert.ok(existsSync(join(paths.requests, `${uid}-hold.json`)), "the hold stays until the workspace lifts it");
-  // The workspace lifts it.
-  assert.equal(holdMacUpdates(false, uid, paths), null);
-  requestMacUpdate(NEW, uid + 1, paths);
-  assert.equal((await run(paths)).result.installed, true);
-  // A hold more than two weeks old no longer counts.
-  const stale = updater();
-  holdMacUpdates(true, uid, stale);
-  requestMacUpdate(NEW, uid, stale);
-  assert.equal((await run(stale, { now: () => Date.now() + MAC_HOLD_FRESH_MS + 60_000 })).result.installed, true);
-  assert.ok(!existsSync(join(stale.requests, `${uid}-hold.json`)), "an old hold is removed");
-  // A hold file under another person's uid that this person wrote holds nothing.
-  const forged = updater();
-  writeFileSync(join(forged.requests, `${uid + 1}-hold.json`), "{}");
-  requestMacUpdate(NEW, uid, forged);
-  assert.equal((await run(forged)).result.installed, true);
-  // The agent never writes through a link someone left under its hold's name.
-  const linked = updater();
-  const target = join(linked.work, "victim");
-  mkdirSync(linked.work, { recursive: true });
-  writeFileSync(target, "keep");
-  symlinkSync(target, join(linked.requests, `${uid}-hold.json`));
-  assert.match(holdMacUpdates(true, uid, linked), /could not be told/);
-  assert.equal(readFileSync(target, "utf8"), "keep");
 });
 
 /** A release server with several versions. */

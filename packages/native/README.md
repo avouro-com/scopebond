@@ -144,9 +144,8 @@ macOS 11 or later. The package:
   (writable by everyone, readable by root alone). It installs the newest signed, notarized release asked for, as the
   agent README describes, then waits for the new agent to run for everyone signed in; when it does not, it installs the
   release before again (the package it kept from that install, or the release downloaded and checked again) and records
-  the update as failed. Every agent is started again afterwards, also when the package failed part way. Nothing is
-  installed while a person's workspace holds updates (`policy: hold`), or when the folder holds something other than
-  requests (skipped and logged). It writes `update-result.json` beside it;
+  the update as failed. Every agent is started again afterwards, also when the package failed part way. Anything in the
+  folder that is not a request file is skipped and logged. It writes `update-result.json` beside it;
 - adds the LaunchAgent `/Library/LaunchAgents/com.scopebond.agent.plist`, which runs `scopebond-agent run` as each person
   who signs in, with the agent's log in their Scopebond folder; a crash restarts it after 30 seconds, a clean stop does
   not. Its label is the agent's own autostart label, so launchd never runs a second agent beside it;

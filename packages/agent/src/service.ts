@@ -44,7 +44,7 @@ import { fetchComputerSummary, openInBrowser, sameOrigin, type ComputerSummary }
 import { startReconnect, type ReconnectStart } from "./reconnect.js";
 import { connectWithInstallKey, FIRST_SIGNIN_FILE, installedKey, installedWorkspace, startFirstSignIn, type FirstSignIn, type RegistryReader } from "./signin.js";
 import { migrateFromNpm, readMigration, npmRemovalCommand } from "./migrate.js";
-import { hasMacUpdater, holdMacUpdates, macAutoUpdate, MAC_UPDATER_PATHS, requestMacUpdate, takeMacUpdateResult, type MacUpdaterPaths } from "./mac-update.js";
+import { hasMacUpdater, macAutoUpdate, MAC_UPDATER_PATHS, requestMacUpdate, takeMacUpdateResult, type MacUpdaterPaths } from "./mac-update.js";
 import { enableAutostart } from "./autostart.js";
 import {
   agentVersion, clearFailedUpdate, failedUpdate, fetchClientVersion, installAgent, maintainHookEntries, maintainedHookCommand, recentlyFailedUpdate, recordFailedUpdate, startCheck,
@@ -622,11 +622,6 @@ export async function startService(options: ServiceOptions): Promise<Service> {
       const newer = updateTarget(target, kind, current);
       // The macOS updater's result for an update asked for earlier (a package that did not install counts as failed).
       if (macUpdater && takeMacUpdateResult(options.dir, macUpdater)) noteUpdateOutcome(options.dir, log);
-      // The workspace's "hold" holds the package's root updater too, whoever on this Mac asks it for an update.
-      if (macUpdater && target) {
-        const refused = holdMacUpdates(target.policy === "hold", process.getuid?.() ?? -1, macUpdater);
-        if (refused) log(`the workspace's update hold could not be passed to the Scopebond updater: ${refused}`);
-      }
       const pending = readUpdatePending(options.dir);
       if (newer && kind === "per-machine" && macUpdater) {
         // The macOS package, for every user: its root updater installs the next signed package when asked.

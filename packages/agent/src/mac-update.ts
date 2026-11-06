@@ -18,9 +18,6 @@
 //     preinstall stopped the agents, the postinstall never ran) does not leave anyone without one.
 //   - It writes what happened where every agent reads it. An agent that asked compares it with its own request: a
 //     package that was not installed counts as a failed update and is tried again later, as on Windows.
-//   - A workspace's "hold" holds the whole Mac: a person's agent whose workspace answers "hold" leaves a hold file in the
-//     requests folder (`<uid>-hold.json`, refreshed at each check), and the updater installs nothing while a fresh one
-//     owned by that uid is there. So nobody on the Mac can install past a workspace's hold by writing a request.
 //
 // A request can only ask for a release that is newer and signed: whoever writes one cannot name a file, an address or an
 // older version. Anything in the folder that is not a regular file (a directory, a link, a pipe) is skipped and logged,
@@ -28,7 +25,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, closeSync, constants, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { LABEL, MAC_PACKAGE_PLIST } from "./autostart.js";
 import { fetchVerifiedInstaller, INSTALL_RESULT, MAC_PACKAGE_EXE, readUpdatePending, updatesDir, type InstallResult } from "./native-update.js";
@@ -94,32 +91,6 @@ export function requestMacUpdate(version: string, uid: number = process.getuid?.
   catch (error) { return `the Scopebond updater could not be asked (${(error as Error).message})`; }
 }
 
-/** How long a person's hold file counts after their agent last wrote it (it writes it at every check, every 6 hours while
- *  it runs): a person who has not signed in for that long no longer holds the Mac back. */
-export const MAC_HOLD_FRESH_MS = 14 * 24 * 60 * 60 * 1000;
-const holdName = (uid: number) => `${uid}-hold.json`;
-
-/** Record (or clear) this person's workspace "hold" for the root updater. Never follows a link or writes into a file that
- *  is not this person's own regular file (someone else may have put one under this name). Returns null when done, else
- *  why not. */
-export function holdMacUpdates(held: boolean, uid: number = process.getuid?.() ?? -1, paths: MacUpdaterPaths = MAC_UPDATER_PATHS): string | null {
-  const file = join(paths.requests, holdName(uid));
-  try {
-    if (!held) {
-      try { unlinkSync(file); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      return null;
-    }
-    const fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0), 0o600);
-    try {
-      const stat = fstatSync(fd);
-      if (!stat.isFile() || (uid >= 0 && stat.uid !== uid)) return "the hold file is not this person's own";
-      ftruncateSync(fd, 0);
-      writeSync(fd, `${JSON.stringify({ hold: true })}\n`, 0);
-    } finally { closeSync(fd); }
-    return null;
-  } catch (error) { return `the Scopebond updater could not be told (${(error as Error).message})`; }
-}
-
 /** The updater's last result, when it is for `version`. */
 export function readMacUpdateResult(paths: MacUpdaterPaths = MAC_UPDATER_PATHS): InstallResult | null {
   try {
@@ -178,32 +149,20 @@ export function readRequest(file: string): string | null {
 }
 
 const REQUEST_NAME = /^-?\d+-[0-9a-f]{16}\.json$/;
-const HOLD_NAME = /^(\d+)-hold\.json$/;
 
-/** What the requests folder holds: the versions people's agents asked for (each request file is removed as it is read),
- *  and the people whose workspace holds updates. Only regular files count; anything else under one of those names (a
- *  directory, a link, a pipe) is skipped and logged, and nothing in the folder can make this throw. */
-export function takeRequests(folder: string, log: (line: string) => void = () => {}, now: number = Date.now()): { versions: string[]; held: number[] } {
+/** The versions people's agents asked for (each request file is removed as it is read; anything else in the folder is
+ *  left). Only regular files count; anything else under a request's name (a directory, a link, a pipe) is skipped and
+ *  logged, and nothing in the folder can make this throw. */
+export function takeRequests(folder: string, log: (line: string) => void = () => {}): string[] {
   const versions: string[] = [];
-  const held: number[] = [];
   let names: string[];
-  try { names = readdirSync(folder); } catch { return { versions, held }; }
+  try { names = readdirSync(folder); } catch { return versions; }
   for (const name of names) {
-    const request = REQUEST_NAME.test(name);
-    const hold = HOLD_NAME.exec(name);
-    if (!request && !hold) continue;
+    if (!REQUEST_NAME.test(name)) continue;
     const file = join(folder, name);
     try {
       const stat = lstatSync(file);
       if (!stat.isFile()) { log(`skipped ${name} in the requests folder: not a regular file`); continue; }
-      if (hold) {
-        // Counted only when it is the person's own (its owner is the uid it names) and recent; anything else goes.
-        const uid = Number(hold[1]);
-        if (stat.uid === uid && now - stat.mtimeMs <= MAC_HOLD_FRESH_MS) { held.push(uid); continue; }
-        log(`removed ${name} from the requests folder: ${stat.uid === uid ? "an old hold" : "not written by that person"}`);
-        rmSync(file, { force: true });
-        continue;
-      }
       try {
         const text = readRequest(file);
         const v = text === null ? undefined : (JSON.parse(text) as { version?: unknown }).version;
@@ -214,7 +173,7 @@ export function takeRequests(folder: string, log: (line: string) => void = () =>
       log(`skipped ${name} in the requests folder: ${(error as Error).message}`);
     }
   }
-  return { versions, held };
+  return versions;
 }
 
 /** The people signed in to this Mac (each one's loginwindow), as the package's scripts find them. */
@@ -293,8 +252,7 @@ export async function runMacUpdater(o: MacUpdaterOptions = {}): Promise<InstallR
   const log = o.log ?? ((line: string) => console.log(`${new Date().toISOString()} ${line}`));
   const now = o.now ?? Date.now;
   const running = o.running ?? agentVersion();
-  const taken = takeRequests(paths.requests, log, now());
-  const asked = taken.versions.sort(compareVersions).at(-1);
+  const asked = takeRequests(paths.requests, log).sort(compareVersions).at(-1);
   if (!asked || compareVersions(asked, running) <= 0) return null;
   const record = (installed: boolean, reason: string | null, exitCode: number | null): InstallResult => {
     const result: InstallResult = { at: new Date(now()).toISOString(), version: asked, installed, reason, exit_code: exitCode, log: null };
@@ -303,7 +261,6 @@ export async function runMacUpdater(o: MacUpdaterOptions = {}): Promise<InstallR
     return result;
   };
   if (!(o.autoUpdate ?? macAutoUpdate)()) return record(false, "updates are turned off for this Mac (AutoUpdate)", null);
-  if (taken.held.length) return record(false, "updates are held by the Scopebond workspace of a person on this Mac (update policy: hold)", null);
   mkdirSync(paths.work, { recursive: true, mode: 0o700 });
   chmodSync(paths.work, 0o700);
   const check = o.check ?? macPackageSignature;
