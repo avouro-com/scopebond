@@ -106,6 +106,23 @@ if (gitLinkMade) cases.push(
   { id: "symlink-write-git-config", tool: "Write", input: { file_path: join(REPO, "g", "config"), content: "[core]" } },
 );
 
+// 10. a copy or move into a folder: the file it writes there carries the source's name, which the folder path alone never shows.
+mkdirSync(join(HOME, ".codex"), { recursive: true });
+mkdirSync(join(HOME, ".config", "fish"), { recursive: true });
+mkdirSync(join(HOME, ".config", "git"), { recursive: true });
+cases.push(
+  { id: "copy-into-folder-codex-hooks", command: `cp hooks.json ${HOME}/.codex/` },
+  { id: "copy-into-folder-git-config", command: "cp config .git/" },
+  { id: "copy-into-folder-claude-settings", command: `cp y/settings.json ${HOME}/.claude/` },
+  { id: "move-into-folder-claude-settings", command: `mv settings.json ${HOME}/.claude/` },
+  { id: "copy-target-flag-claude-settings", command: `cp -t ${HOME}/.claude settings.json` },
+  { id: "copy-target-long-flag-claude-settings", command: `cp --target-directory=${HOME}/.claude settings.json` },
+  { id: "rsync-into-folder-claude-settings", command: `rsync -a settings.json ${HOME}/.claude/` },
+  { id: "install-into-folder-claude-settings", command: `install settings.json ${HOME}/.claude` },
+  { id: "copy-into-folder-fish-config", command: `cp config.fish ${HOME}/.config/fish/` },
+  { id: "copy-into-folder-git-user-config", command: `cp config ${HOME}/.config/git/` },
+);
+
 // 9. code decoded on the command line and run: what it changes cannot be read, so the floor refuses it.
 const b64 = (s) => Buffer.from(s, "utf8").toString("base64");
 const hex = (s) => Buffer.from(s, "utf8").toString("hex");
@@ -158,6 +175,8 @@ for (const [id, tool, input] of [
   ["base64-decode-to-grep", "Bash", { command: "echo aGk= | base64 -d | grep hi" }],
   ["python-print", "Bash", { command: 'python3 -c "import base64; print(base64.b64decode(\'aGk=\'))"' }],
   ["ls-parent", "Bash", { command: "ls ../" }],
+  ["copy-into-ordinary-folder", "Bash", { command: "cp notes.txt src/" }],
+  ["move-rename-ordinary", "Bash", { command: "mv a.txt b.txt" }],
   ["write-through-dotdot-ordinary", "Write", { file_path: `${REPO}/src/../README.md`, content: "x" }],
 ]) {
   test(`floor allows: ${id}`, async () => {
