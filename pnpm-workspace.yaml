@@ -22,3 +22,4 @@ onlyBuiltDependencies:
 # - launch-editor >= 2.14.2 (GHSA-587h-7wmj-h5pm, GHSA-698v-4r3x-3vcv, GHSA-r825-w8mm-5pxw), via @changesets/cli.
 overrides:
   launch-editor: ^2.14.2
+  "minimatch@>=7.0.0 <11.0.1": ^11.0.1
