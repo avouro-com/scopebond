@@ -20,11 +20,17 @@
  *    hook entries; `capabilities` still lists nested orchestration as not covered, as before.
  *  - `Skill`: loads a skill's instructions into the conversation. A command or edit it leads to is its own tool call
  *    (Bash, Edit, ...), checked by this hook.
+ *  - `SendMessage`, `ListAgents`: talk to or list the sub-agents `Agent` started (each of their tool calls is checked as
+ *    theirs); `ReadNotifications`: reads the host's own queued notices.
+ *  - `TaskCreate`, `TaskUpdate`, `TaskList`, `TaskGet`: the agent's own task list, as `TodoWrite`.
  *  Not on the list: `SlashCommand` (a command file can run shell commands the host runs itself), `ListMcpResourcesTool`
- *  and `ReadMcpResourceTool` (they reach an MCP server outside the MCP rules), and every other name. */
+ *  and `ReadMcpResourceTool` (they reach an MCP server outside the MCP rules), the tools that start work later or elsewhere
+ *  (`Monitor`, which runs a command; `CronCreate`, `ScheduleWakeup`, `RemoteTrigger`, `Workflow`; `PushNotification` and
+ *  `SendUserFile`, which send outside the session), and every other name. */
 export const CLAUDE_SAFE_TOOLS: ReadonlySet<string> = new Set([
   "TodoWrite", "TodoRead", "EnterPlanMode", "ExitPlanMode", "AskUserQuestion", "WebSearch", "ToolSearch",
   "BashOutput", "TaskOutput", "KillShell", "KillBash", "TaskStop", "Task", "Agent", "Skill",
+  "SendMessage", "ListAgents", "ReadNotifications", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet",
 ]);
 
 /** GitHub Copilot: the Claude Code names above, and Copilot's own names that map to none of them.

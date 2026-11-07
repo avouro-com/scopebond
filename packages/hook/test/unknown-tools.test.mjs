@@ -38,6 +38,10 @@ const CASES = [
   { harness: "claude", safe: ["TodoWrite", { todos: [] }], mapped: ["Read", { file_path: "src/a.ts" }] },
   { harness: "claude", safe: ["AskUserQuestion", { questions: [] }], mapped: ["Glob", { pattern: "**/*.ts" }] },
   { harness: "claude", safe: ["Skill", { skill: "release-notes" }], mapped: ["Read", { file_path: "src/a.ts" }] },
+  { harness: "claude", safe: ["SendMessage", { to: "agent-1", message: "continue" }], mapped: ["Read", { file_path: "src/a.ts" }] },
+  { harness: "claude", safe: ["ListAgents", {}], mapped: ["Read", { file_path: "src/a.ts" }] },
+  { harness: "claude", safe: ["ReadNotifications", {}], mapped: ["Read", { file_path: "src/a.ts" }] },
+  { harness: "claude", safe: ["TaskUpdate", { taskId: "1", status: "completed" }], mapped: ["Read", { file_path: "src/a.ts" }] },
   { harness: "copilot", safe: ["Skill", { skill: "release-notes" }], mapped: ["view", { path: "src/a.ts" }] },
   { harness: "codex", safe: ["update_plan", { plan: [] }], mapped: ["Bash", { command: "ls -la" }] },
   { harness: "copilot", safe: ["read_bash", { sessionId: "1" }], mapped: ["view", { path: "src/a.ts" }] },
@@ -98,7 +102,7 @@ for (const mode of ["monitor", "enforce"]) {
 }
 
 test("SlashCommand and the MCP resource tools are not known-safe: refused like any unknown tool", async () => {
-  for (const name of ["SlashCommand", "ListMcpResourcesTool", "ReadMcpResourceTool"]) {
+  for (const name of ["SlashCommand", "ListMcpResourcesTool", "ReadMcpResourceTool", "Monitor", "CronCreate", "ScheduleWakeup", "RemoteTrigger", "Workflow", "PushNotification", "SendUserFile"]) {
     for (const harness of ["claude", "copilot"]) {
       const { dir } = setup();
       const actions = MAPPERS[harness](name, {}, dir);
