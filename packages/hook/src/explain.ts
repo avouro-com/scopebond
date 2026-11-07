@@ -45,7 +45,8 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "");
 export function describeAction(intent: ExplainIntent | undefined): string {
   const type = str(intent?.action_type);
   const p = (intent?.params ?? {}) as Record<string, unknown>;
-  const bits = type === "shell.exec" ? str(p.program)
+  // Text eval or source ran from a readable command's output (`eval "$(fnm env)"`) has no program of its own: whose output it is.
+  const bits = type === "shell.exec" ? str(p.program) || (str(p.output_of) ? `output of ${str(p.output_of)}` : "")
     : type === "git.push" ? `${str(p.remote)} ${str(p.ref)}`.trim()
     : type === "file.write" || type === "file.read" ? str(p.path)
     : type === "mcp.tool.call" ? `${str(p.server)}/${str(p.tool)}`

@@ -40,6 +40,11 @@ export interface SimpleCommand {
   /** Read as POSIX, the command only prints its help or version, or rehearses (`rm --help`, `sudo --version`, `rm -h`):
    *  it changes nothing (see `describesItself`). */
   describes?: true;
+  /** Set on an `opaque` command that is the text `eval`, `source` or `.` runs, when that text is the output of one readable
+   *  command that does not print text the command line, a file or the network controls (`eval "$(fnm env)"`,
+   *  `source <(kubectl completion zsh)`; see `outputRunner`): that command's program. Running its output is trusted as running
+   *  it is, so safe-shell judges the text by this program. The text itself is still unknown. */
+  outputOf?: string;
 }
 
 /** The options by which a command line only describes itself or rehearses, in any program: `--help`, `--version`, and
@@ -222,8 +227,10 @@ const SUBST = "${__sb_subst}";
  *  pulled out too and blanked, a `( … )` group that opens a word is a value only
  *  known at run time (the placeholder), a braced variable (`${env:X}`) stays as written and the backtick
  *  escapes rather than substitutes. */
-function extractSubstitutions(seg: string, ps = false): { outer: string; inner: string[] } {
+function extractSubstitutions(seg: string, ps = false): { outer: string; inner: string[]; processes: number[] } {
   const inner: string[] = [];
+  // Which of `inner` are POSIX process substitutions (`<( … )`, `>( … )`), by index.
+  const processes: number[] = [];
   let outer = "";
   let quote: '"' | "'" | null = null;
   const group = (start: number): number => {
@@ -279,10 +286,14 @@ function extractSubstitutions(seg: string, ps = false): { outer: string; inner: 
     if (c === "'" || c === '"') { quote = c; outer += c; continue; }
     if (!ps && c === "\\" && n !== undefined) { outer += c + seg[++i]; continue; }
     if (c === "(" && n === ")") { outer += "()"; i++; continue; }
-    if (c === "(") { i = groupAt(i + 1); continue; }
+    if (c === "(") {
+      if (!ps && (seg[i - 1] === "<" || seg[i - 1] === ">")) processes.push(inner.length);
+      i = groupAt(i + 1);
+      continue;
+    }
     outer += c;
   }
-  return { outer, inner };
+  return { outer, inner, processes };
 }
 
 interface Token { t: string; op: boolean }
@@ -901,6 +912,41 @@ function psStatement(text: string): { kind: "none" } | { kind: "opaque" } | { ki
   return { kind: "opaque" };
 }
 
+/** Programs whose output is text that something other than the program decides: the command line (`echo`, `printf`, `date
+ *  +…`, `basename`), a file or folder (`cat`, `sed`, `ls`, `jq`, `git`, a decoder or decompressor) or the network (`curl`,
+ *  `ssh`). Running such output runs whatever that text says, so it is never trusted as running the program is. */
+const TEXT_PRODUCERS = new Set([
+  "echo", "printf", "print", "yes", "seq", "date", "expr", "basename", "dirname", "realpath", "readlink", "printenv", "env", "getopt",
+  "cat", "tac", "nl", "head", "tail", "sed", "gsed", "awk", "gawk", "mawk", "nawk", "perl", "tr", "rev", "cut", "paste", "join",
+  "sort", "uniq", "comm", "column", "fold", "fmt", "pr", "expand", "unexpand", "tee", "grep", "egrep", "fgrep", "rg", "ag", "look",
+  "strings", "od", "hexdump", "iconv", "envsubst", "m4", "xargs", "ls", "find", "stat", "du", "file",
+  "base64", "gbase64", "base32", "basenc", "xxd", "uudecode", "openssl",
+  "gzip", "gunzip", "zcat", "bzip2", "bunzip2", "bzcat", "xz", "unxz", "xzcat", "zstd", "zstdcat", "unzip", "tar", "bsdtar",
+  "curl", "wget", "fetch", "nc", "ncat", "netcat", "socat", "telnet", "ssh",
+  "jq", "yq", "gojq", "xq", "git", "cmd", "powershell", "pwsh",
+]);
+/** A word with no space, quote, variable or other shell character in it: echoed into the output, it is one plain word. */
+const PLAIN_WORD = /^[\w@%+=:,./~-]*$/;
+
+/** The program whose output `eval`, `source` or `.` runs, when running that output is trusted as running the program is
+ *  (`SimpleCommand.outputOf`), or null. `sub` is the text of the one substitution whose output is run, `commands` what it
+ *  decomposed to, `inherited` the assignments in force around it. The text must be one command read to its end: no
+ *  variable, substitution or input in it (`$`, a backquote, `<`), no assignment or wrapper before its program, and only
+ *  plain words, so no word it prints back can become a command with arguments. Its program must not print text something
+ *  else decides (`TEXT_PRODUCERS`) or run code given inline (`python3 -c`, `bash -c`). A destructive program is returned
+ *  like any other: safe-shell denies it by name. */
+function outputRunner(sub: string, commands: SimpleCommand[], inherited: readonly string[]): string | null {
+  if (commands.length !== 1 || /[$`<]/.test(sub)) return null;
+  const c = commands[0];
+  if (c.opaque || c.assignOnly || c.program === "" || (c.assigns?.length ?? 0) !== inherited.length) return null;
+  if (![c.programRaw, ...c.argv].every((w) => PLAIN_WORD.test(w))) return null;
+  const canon = canonProgram(c.program);
+  if (TEXT_PRODUCERS.has(canon)) return null;
+  if ((INTERPRETERS.has(canon) || /^python[0-9.]*$/.test(canon)) && c.argv.some((a) => INLINE_CODE.test(a))) return null;
+  if (SHELLS.has(canon) && shellScriptArg(c.argv) !== null) return null;
+  return c.program;
+}
+
 /** Decompose a command line into the simple commands it will run. Recurses into
  *  `-c` scripts and command substitutions up to a bounded depth. `inherited` is the
  *  assignments an enclosing command puts in force for this script (`X=1 sh -c '…'`).
@@ -919,16 +965,17 @@ export function decomposeShell(command: string, depth = 0, inherited: readonly s
   // An interpreter's here-document is its code: recorded as that interpreter run with the code inline.
   for (const c of code) fromHeredocs.push({ program: c.program, programRaw: c.program, argv: ["-e", c.body], redirects: [], raw: `${c.program} <<heredoc`, opaque: false });
 
-  const { segments, unbalanced } = splitTopLevel(text, ps);
+  const { segments, seps, unbalanced } = splitTopLevel(text, ps);
   // Unreadable: kept as the text without its here-document bodies, which are data (a commit message that says "scopebond"
   // never counts as naming it); a body fed to a shell is decomposed on its own above.
   if (unbalanced) return [...opaque(text), ...fromHeredocs];
 
   const out: SimpleCommand[] = [];
-  for (const seg of segments) {
+  for (const [k, seg] of segments.entries()) {
     const extracted = extractSubstitutions(seg, ps);
     let outer = extracted.outer;
-    for (const sub of extracted.inner) out.push(...decomposeShell(sub, depth + 1, inherited, dialect));
+    const innerCommands = extracted.inner.map((sub) => decomposeShell(sub, depth + 1, inherited, dialect));
+    for (const sub of innerCommands) out.push(...sub);
     if (ps) {
       const statement = psStatement(outer);
       if (statement.kind === "opaque") { out.push(...opaque(seg)); continue; }
@@ -970,6 +1017,16 @@ export function decomposeShell(command: string, depth = 0, inherited: readonly s
     // `pwsh`/`powershell` and Invoke-Expression, cmd's own for `cmd /c`.
     const nested = (script: string | null | undefined) => { if (script) out.push(...decomposeShell(script, depth + 1, assigns)); };
     const nestedPowerShell = (script: string) => { out.push(...decomposeShell(powershellText(script), depth + 1, assigns, "powershell")); };
+    // The program whose output this command runs as code (`outputRunner`): the output of its one command substitution
+    // (`eval "$(fnm env)"`) or process substitution (`source <(kubectl completion zsh)`), with nothing else in the command and
+    // nothing piped or redirected into it, which could put other text in that output's place.
+    const outputOf = (kind: "command" | "process"): string | null => {
+      if (ps || extracted.inner.length !== 1 || (kind === "process") !== (extracted.processes[0] === 0) || seps[k - 1] === "|") return null;
+      const inputs = tokenize(outer).filter((t) => t.op && t.t.replace(/^&/, "").startsWith("<")).length;
+      const alone = kind === "command" ? argv.length === 1 && argv[0] === SUBST && inputs === 0 : argv.length === 0 && redirects.length === 0 && inputs === 1;
+      return alone ? outputRunner(extracted.inner[0], innerCommands[0], inherited) : null;
+    };
+    const runsOutput = (outputOf: string | null): SimpleCommand => ({ program: "", programRaw: "", argv: [], redirects: [], raw: seg, opaque: true, ...(outputOf ? { outputOf } : {}) });
     if (SHELLS.has(canon)) {
       const script = shellScriptArg(argv);
       nested(script);
@@ -982,7 +1039,14 @@ export function decomposeShell(command: string, depth = 0, inherited: readonly s
       // command line is scanned as that interpreter's code, so a path named anywhere in it counts.
       out.push({ program, programRaw: tokens[0], argv: ["-e", src], redirects: [], raw: seg, opaque: false });
     } else if (canon === "eval") {
-      nested(argv.join(" "));
+      // The text eval runs is only known at run time (an opaque command), unless it is the output of a command whose output
+      // is trusted as running it is.
+      const from = outputOf("command");
+      if (from) out.push(runsOutput(from));
+      else nested(argv.join(" "));
+    } else if (!ps && (canon === "source" || canon === ".") && extracted.processes.length) {
+      // What a process substitution prints is the script source and `.` run: only known at run time, as eval's text is.
+      out.push(runsOutput(outputOf("process")));
     } else if (canon === "iex" || canon === "invoke-expression") {
       // Given no code (`$cmd | iex`), it runs what the pipeline hands it: only known at run time.
       // eslint-disable-next-line security/detect-unsafe-regex -- bounded: the nested optionals spell at most `-command`

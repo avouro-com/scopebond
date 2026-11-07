@@ -1661,8 +1661,11 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
   // text too. Only the text: the program and paths a policy judges are never changed by what another part says.
   const redact = (raw: string): string => redactCommand(hidden.length ? maskWords(raw, hidden) : raw);
   if (sc.opaque) {
+    // Text eval or source runs from the output of a readable command (shell.ts `outputRunner`: `eval "$(fnm env)"`) is judged as
+    // running that command is: safe-shell bounds it by that program (`program_scope`), and `output_of` records whose output ran.
+    const from = sc.outputOf ? basename(scrubSecrets(sc.outputOf)) : "";
     const opaque: Mapped[] = [{
-      intent: { action_type: "shell.exec", params: { command: redact(sc.raw), program: "", ...(cwd ? { cwd } : {}) } },
+      intent: { action_type: "shell.exec", params: { command: redact(sc.raw), program: "", ...(from ? { output_of: from, program_scope: from } : {}), ...(cwd ? { cwd } : {}) } },
       evaluated: true, source: "shell",
     }];
     // A command that cannot be read but names Scopebond (`eval "$X @scopebond/hook uninstall"`) is treated as switching it off:
@@ -1851,7 +1854,7 @@ function withDeleteScope(mapped: Mapped[], verdict: DeleteVerdict | undefined, c
   // A delete or a write carries every target it names (`targets`), so a block's digest knows the kind of place it reaches.
   const named = shellTargets(mapped, verdict);
   const out = mapped.map((m) => (m.intent.action_type === "shell.exec"
-    ? { ...m, intent: { ...m.intent, params: { ...m.intent.params, program_scope: form ?? programScope(typeof m.intent.params.program === "string" ? m.intent.params.program : "", verdict), ...(verdict?.targets ? { delete_targets: verdict.targets } : {}), ...(named ? { targets: named } : {}) } } }
+    ? { ...m, intent: { ...m.intent, params: { ...m.intent.params, program_scope: form ?? (typeof m.intent.params.program_scope === "string" ? m.intent.params.program_scope : programScope(typeof m.intent.params.program === "string" ? m.intent.params.program : "", verdict)), ...(verdict?.targets ? { delete_targets: verdict.targets } : {}), ...(named ? { targets: named } : {}) } } }
     : m));
   if (verdict?.scope !== "contained") return out;
   const seen = new Set(out.filter((m) => m.intent.action_type === "file.write").map((m) => String(m.intent.params.path)));
