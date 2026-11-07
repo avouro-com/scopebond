@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import {
   engineToRun, readCurrentEngine, writeCurrentEngine, engineStartFailures, recordEngineStartFailure, checkStagedEngine, verifyEngineManifest,
@@ -46,7 +46,8 @@ async function runWith(home, key, options = {}) {
 }
 
 test("engineHome is the hook's own home (SCOPEBOND_HOME, else ~/.scopebond)", () => {
-  assert.equal(engineHome({}), join(homedir(), ".scopebond"));
+  // The account's home folder, not HOME (which the test run moves).
+  assert.equal(engineHome({}), join(userInfo().homedir, ".scopebond"));
   assert.equal(engineHome({ SCOPEBOND_HOME: "/x/y" }), "/x/y");
   assert.equal(engineHome(process.env), userHome());
 });
