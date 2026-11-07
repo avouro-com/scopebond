@@ -643,6 +643,9 @@ jobs:
   defender-scan:
     name: defender scan (windows)
     needs: seal
+    # A job with no condition of its own runs only when every job before it, however far back, succeeded; sign-macos is
+    # skipped until Apple signing is on, so without this the scan (and the draft release after it) never ran.
+    if: ${{ !cancelled() && needs.seal.result == 'success' }}
     runs-on: windows-latest
     permissions:
       contents: read # check out the scan script
