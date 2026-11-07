@@ -165,7 +165,7 @@ export function compile(rules: RuleSet, agentKid: string): Record<string, unknow
       {
         id: "safe-shell", type: "action_allowlist", mode: mode("safe-shell"), action_types: ["shell.exec"],
         param_bounds: { [SAFE_SHELL_PARAM]: { pattern: programPattern(rules.destructive_programs) } },
-        description: `Deny destructive programs (${sentence(rules.destructive_programs, 10)}) in any case and with or without .exe. ${deletes ? `${deletes} ` : ""}${DESTRUCTIVE_FORMS_SENTENCE} An empty program — a command that could not be parsed, or whose program is only known at run time ($VAR, $(…), eval of a variable) — is denied. Argument-shaped deletion (find -delete, git clean) is not a program name and is not covered here. Change this list in .scopebond/${RULES_FILE}.`,
+        description: `Deny destructive programs (${sentence(rules.destructive_programs, 10)}) in any case and with or without .exe. ${deletes ? `${deletes} ` : ""}${DESTRUCTIVE_FORMS_SENTENCE} An empty program — a command that could not be parsed, or whose program is only known at run time ($VAR, $(…), eval of a variable) — is denied. Text that eval, source or . runs from the output of one fully readable command is judged as that command's program (eval "$(fnm env)" as fnm), unless the command prints text the command line, a file or the network decides (echo, printf, cat, sed, curl, git and the like) or runs code given inline. Argument-shaped deletion (find -delete, git clean) is not a program name and is not covered here. Change this list in .scopebond/${RULES_FILE}.`,
       },
       {
         id: "protect-write", type: "action_allowlist", mode: mode("protect-write"), action_types: ["file.write"],

@@ -93,13 +93,13 @@ export function classifyIntent(intent: NormalizedIntent, rules: RuleSet): Classi
     if (params.direction !== "up" && params.env !== "development") ids.push("H10");
   } else if (intent.action_type === "shell.exec") {
     const program = typeof params.program === "string" ? params.program : "";
-    if (program === "") unknown.push("program not resolved");
+    // A delete whose every target is inside the working folder (delete-scope.ts), or that git can restore (git-restore.ts), is
+    // not destructive here; a destructive form of a program (destructive-forms.ts), and text run from a readable command's
+    // output (`eval "$(fnm env)"`, judged as that command), are judged as safe-shell judges them, by `program_scope`.
+    const scope = typeof params.program_scope === "string" && params.program_scope !== "" ? params.program_scope : program;
+    if (scope === "") unknown.push("program not resolved");
     else {
       ids.push("I05");
-      // A delete whose every target is inside the working folder (delete-scope.ts), or that git can restore (git-restore.ts), is
-      // not destructive here; a destructive form of a program (destructive-forms.ts) is judged as safe-shell judges it, by
-      // `program_scope`.
-      const scope = typeof params.program_scope === "string" && params.program_scope !== "" ? params.program_scope : program;
       if ((isDestructiveProgram(rules, program) || isDestructiveProgram(rules, scope)) && !isContainedDelete(params) && !isRestorableDelete(params)) { ids.push("H04"); coverage = "program_only"; }
     }
   }
