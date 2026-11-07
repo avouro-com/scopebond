@@ -6,6 +6,7 @@ settings:
 
 overrides:
   launch-editor: ^2.14.2
+  minimatch@>=7.0.0 <11.0.1: ^11.0.1
 
 importers:
 
@@ -555,6 +556,9 @@ packages:
   '@humanwhocodes/retry@0.4.3':
     resolution: {integrity: sha512-bV0Tgo9K4hfPCek+aMAn81RppFKv2ySDQeMoSZuvTASywNTnVJCArCZE2FWqpvIatKu7VMRLWlR1EazvVhDyhQ==}
     engines: {node: '>=18.18'}
+
+  '@isaacs/nonrecursive-glob-match@1.0.3':
+    resolution: {integrity: sha512-SI7kyKHq4XXDRozw+r9GlRZkia1ZkFrpLW98r2IC2Bpr8YkFGE3fvjzmxCG0x78A++69HmDNrDvSMYBZmHGpKA==}
 
   '@keyv/bigmap@1.3.1':
     resolution: {integrity: sha512-WbzE9sdmQtKy8vrNPa9BRnwZh5UF4s1KTmSK0KUVLo3eff5BlQNNWDnFOouNpKfPKDnms9xynJjsMYjMaT/aFQ==}
@@ -1304,8 +1308,8 @@ packages:
     resolution: {integrity: sha512-SFNOvSJ+Dgf/9An904Yx+CgSlIPCkIpao4qo51lpee25TIRejdH3rhR4EZMGoNx3/TP3O+wzWuiTFl4sqbltzA==}
     hasBin: true
 
-  jschardet@4.0.0:
-    resolution: {integrity: sha512-EsNiLV+xzeMBtkGL/HeWoUivNkGIr8JmaC5A5j7DBlKnhp4CcBTWKEOtNg6vlmf+mkn9yQ9Wals47u7+LoTr7w==}
+  jschardet@4.1.0:
+    resolution: {integrity: sha512-ighRZ11mb6l4m+xSKoivuqNj44qkObODXsAnnkkfYcY4JfYRnEgAe/w1c3mbnJtTQmLtfebAUfXGsUGUJImexg==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -1364,8 +1368,8 @@ packages:
     engines: {node: '>= 16'}
     hasBin: true
 
-  minimatch@10.2.6:
-    resolution: {integrity: sha512-vpLQEs+VLCr1nU0BXS07maYoFwlDAH0gngQuuttxIwutDFEMHq2blX+8vpgxDdK3J1PwjCJiep77OitTZ4Ll1A==}
+  minimatch@11.0.3:
+    resolution: {integrity: sha512-iny/40PEGkNJQ5/Pv6z3nm6FbRAby32GeZRjCUJk2WnNDbgPSTcdI+DDvLqsgBdD4cD5sMtMheqPPnehCCa8Nw==}
     engines: {node: 18 || 20 || >=22}
 
   minimatch@3.1.5:
@@ -1956,7 +1960,7 @@ snapshots:
     dependencies:
       '@eslint/object-schema': 3.0.5
       debug: 4.4.3
-      minimatch: 10.2.6
+      minimatch: 11.0.3
     transitivePeerDependencies:
       - supports-color
 
@@ -2025,6 +2029,8 @@ snapshots:
 
   '@humanwhocodes/retry@0.4.3': {}
 
+  '@isaacs/nonrecursive-glob-match@1.0.3': {}
+
   '@keyv/bigmap@1.3.1(keyv@5.6.0)':
     dependencies:
       hashery: 1.5.1
@@ -2055,7 +2061,7 @@ snapshots:
   '@microsoft/eslint-formatter-sarif@3.1.0':
     dependencies:
       eslint: 8.57.1
-      jschardet: 4.0.0
+      jschardet: 4.1.0
       lodash: 4.18.1
       utf8: 3.0.0
     transitivePeerDependencies:
@@ -2290,7 +2296,7 @@ snapshots:
       '@typescript-eslint/types': 8.71.0
       '@typescript-eslint/visitor-keys': 8.71.0
       debug: 4.4.3
-      minimatch: 10.2.6
+      minimatch: 11.0.3
       semver: 7.8.5
       tinyglobby: 0.2.17
       ts-api-utils: 2.5.0(typescript@5.9.3)
@@ -2518,7 +2524,7 @@ snapshots:
       imurmurhash: 0.1.4
       is-glob: 4.0.3
       json-stable-stringify-without-jsonify: 1.0.1
-      minimatch: 10.2.6
+      minimatch: 11.0.3
       natural-compare: 1.4.0
       optionator: 0.9.4
     optionalDependencies:
@@ -2744,7 +2750,7 @@ snapshots:
     dependencies:
       argparse: 2.0.1
 
-  jschardet@4.0.0: {}
+  jschardet@4.1.0: {}
 
   json-buffer@3.0.1: {}
 
@@ -2811,8 +2817,9 @@ snapshots:
 
   marked@9.1.6: {}
 
-  minimatch@10.2.6:
+  minimatch@11.0.3:
     dependencies:
+      '@isaacs/nonrecursive-glob-match': 1.0.3
       brace-expansion: 5.0.12
 
   minimatch@3.1.5:
