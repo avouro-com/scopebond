@@ -573,14 +573,20 @@ jobs:
           chmod 755 "$exe"
           rm -f packages/native/build/scopebond-agent-*.pkg
           test "$(lipo -archs "$exe")" = "$ARCH"
+          # The keychain stays unlocked for the job's six hours: notarization waits can be long, and the installer
+          # package is signed after one of them.
           keychain="$RUNNER_TEMP/signing.keychain-db"
           security create-keychain -p "" "$keychain"
-          security set-keychain-settings -lut 3600 "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "" "$keychain"
           echo "$APPLE_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          # The .p12 carries Apple's Developer ID G2 intermediate with the identity; it is imported with it, so the
+          # chain to Apple's root builds on a runner that does not have that intermediate.
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -f pkcs12 -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security list-keychains -d user -s "$keychain"
           security set-key-partition-list -S apple-tool:,apple: -s -k "" "$keychain"
+          security find-identity -v -p codesigning "$keychain" | grep -F "$APPLE_SIGNING_IDENTITY" >/dev/null \
+            || { echo "no valid identity \"$APPLE_SIGNING_IDENTITY\" in the keychain (is the Developer ID G2 intermediate in the .p12?)" >&2; security find-identity -p codesigning "$keychain" >&2; exit 1; }
           cat > "$RUNNER_TEMP/entitlements.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -599,9 +605,13 @@ jobs:
           codesign --verify --strict --verbose=2 packages/native/build/Scopebond.app
           ditto -c -k --keepParent "$exe" "scopebond-agent-macos-$ARCH.zip"
           echo "$APPLE_NOTARY_KEY" > "$RUNNER_TEMP/notary.p8"
-          xcrun notarytool submit "scopebond-agent-macos-$ARCH.zip" --key "$RUNNER_TEMP/notary.p8" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER" --wait
+          # notarytool can end without an error when Apple rejects the submission: only "status: Accepted" passes.
+          xcrun notarytool submit "scopebond-agent-macos-$ARCH.zip" --key "$RUNNER_TEMP/notary.p8" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER" --wait | tee "$RUNNER_TEMP/notary-zip.log"
+          grep -Eq '^[[:space:]]*status: Accepted[[:space:]]*$' "$RUNNER_TEMP/notary-zip.log" \
+            || { echo "Apple did not accept the executable (xcrun notarytool log <id> says why)" >&2; exit 1; }
       # The installer package around the signed executable: signed by the Developer ID Installer identity (a certificate
-      # of its own, in the same keychain), notarized, and the ticket stapled so Gatekeeper accepts it offline.
+      # of its own, in a keychain of its own, so the intermediate both .p12 files carry is not imported twice into one
+      # keychain), notarized, and the ticket stapled so Gatekeeper accepts it offline.
       - name: Build, sign, notarize and staple the installer package
         env:
           APPLE_INSTALLER_CERTIFICATE_P12: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_P12 }}
@@ -612,14 +622,22 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$APPLE_INSTALLER_IDENTITY" || { echo "APPLE_INSTALLER_IDENTITY is not set: the package would be unsigned" >&2; exit 1; }
-          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain="$RUNNER_TEMP/installer.keychain-db"
+          security create-keychain -p "" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "" "$keychain"
           echo "$APPLE_INSTALLER_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/installer.p12"
-          security import "$RUNNER_TEMP/installer.p12" -k "$keychain" -P "$APPLE_INSTALLER_CERTIFICATE_PASSWORD" -T /usr/bin/productbuild -T /usr/bin/productsign
+          security import "$RUNNER_TEMP/installer.p12" -k "$keychain" -f pkcs12 -P "$APPLE_INSTALLER_CERTIFICATE_PASSWORD" -T /usr/bin/productbuild -T /usr/bin/productsign
+          security list-keychains -d user -s "$keychain" "$RUNNER_TEMP/signing.keychain-db"
           security set-key-partition-list -S apple-tool:,apple: -s -k "" "$keychain"
+          security find-identity -v "$keychain" | grep -F "$APPLE_INSTALLER_IDENTITY" >/dev/null \
+            || { echo "no valid identity \"$APPLE_INSTALLER_IDENTITY\" in the keychain (is the Developer ID G2 intermediate in the .p12?)" >&2; security find-identity "$keychain" >&2; exit 1; }
           SCOPEBOND_TRAY_APP="$PWD/packages/native/build/Scopebond.app" node packages/native/build-pkg.mjs packages/native/build/scopebond-agent
           pkg="$(ls packages/native/build/scopebond-agent-*.pkg)"
           pkgutil --check-signature "$pkg"
-          xcrun notarytool submit "$pkg" --key "$RUNNER_TEMP/notary.p8" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER" --wait
+          xcrun notarytool submit "$pkg" --key "$RUNNER_TEMP/notary.p8" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER" --wait | tee "$RUNNER_TEMP/notary-pkg.log"
+          grep -Eq '^[[:space:]]*status: Accepted[[:space:]]*$' "$RUNNER_TEMP/notary-pkg.log" \
+            || { echo "Apple did not accept the package (xcrun notarytool log <id> says why)" >&2; exit 1; }
           xcrun stapler staple "$pkg"
           xcrun stapler validate "$pkg"
           spctl --assess --type install --verbose=2 "$pkg"
@@ -698,6 +716,6 @@ jobs:
           notes="The Scopebond Agent and hook as one signed file, the signed Scopebond tray, and the signed installer with both (per user by default; ALLUSERS=1 for every user; the tray starts at sign-in and keeps the agent running), plus the engine bundle with its signed manifest, from which signed installs update their hook without a new installer. Avouro LLC, Azure Artifact Signing, timestamped. Check it: SHA256SUMS, the CycloneDX SBOM, and the build provenance attestation (gh attestation verify scopebond-agent-${VERSION}-x64.exe --repo ${REPO})."
           if [ "$MACOS" = true ]; then
             title="Scopebond Agent ${VERSION} for Windows and macOS (signed)"
-            notes="${notes} For macOS, for Apple silicon (arm64) and Intel (x86_64): the installer package scopebond-agent-${VERSION}-<arch>.pkg (/usr/local/bin/scopebond-agent for every user, and a LaunchAgent that starts it at each sign-in; remove it with: sudo \"/Library/Application Support/Scopebond/uninstall.sh\"), and the bare executable scopebond-agent-macos-<arch>.zip, Developer ID signed and notarized (the package stapled). Check them: spctl --assess --type install <pkg>, and gh attestation verify <file> --repo ${REPO}."
+            notes="${notes} For macOS, for Apple silicon (arm64) and Intel (x86_64): the installer package scopebond-agent-${VERSION}-<arch>.pkg (the agent for every user in the root-owned /Library/Application Support/Scopebond/bin, linked from /usr/local/bin/scopebond-agent for PATH, and a LaunchAgent that starts it at each sign-in; remove it with: sudo \"/Library/Application Support/Scopebond/uninstall.sh\"), and the bare executable scopebond-agent-macos-<arch>.zip, Developer ID signed and notarized (the package stapled). Check them: spctl --assess --type install <pkg>, and gh attestation verify <file> --repo ${REPO}."
           fi
           gh release create "$tag" --repo "$REPO" --target "$SHA" --draft --prerelease --title "$title" --notes "$notes" out/*
