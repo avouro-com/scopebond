@@ -95,6 +95,37 @@ function braceEnd(src: string, start: number): number {
   return -1;
 }
 
+/** The index of the `)` that closes the POSIX command substitution or group whose text starts at `start` (just after its
+ *  `$(` or `(`), or -1 when it never closes. Read as the shell reads it: the text inside is a quoting context of its own,
+ *  also when the substitution sits inside double quotes, so `"$(printf '%s' 'it'"'"'s')"` holds one substitution whose
+ *  quotes are its own. Single quotes run to the next `'`; inside double quotes only `"`, a backslash and a nested `$(`
+ *  count; a backquoted substitution runs to the next backquote; a backslash escapes the character after it. A stack, not
+ *  recursion, so no depth of nesting can exhaust the call stack. */
+function substitutionEnd(src: string, start: number): number {
+  // Each entry is the paren depth of an open substitution, or `"` for double quotes opened inside one.
+  const stack: Array<number | '"'> = [1];
+  for (let i = start; i < src.length; i++) {
+    const c = src[i];
+    const top = stack[stack.length - 1];
+    if (c === "\\") { i++; continue; }
+    if (c === "`") { const end = src.indexOf("`", i + 1); if (end < 0) return -1; i = end; continue; }
+    if (top === '"') {
+      if (c === '"') stack.pop();
+      else if (c === "$" && src[i + 1] === "(") { stack.push(1); i++; }
+      continue;
+    }
+    if (c === "'") { const end = src.indexOf("'", i + 1); if (end < 0) return -1; i = end; continue; }
+    if (c === '"') { stack.push('"'); continue; }
+    if (c === "(") { stack[stack.length - 1] = top + 1; continue; }
+    if (c === ")") {
+      if (top > 1) { stack[stack.length - 1] = top - 1; continue; }
+      stack.pop();
+      if (stack.length === 0) return i;
+    }
+  }
+  return -1;
+}
+
 /** Split a command line into top-level simple-command strings at unquoted
  *  separators (`;`, newline, `&&`, `||`, `|`, `&`), leaving quotes, `$( )`,
  *  backticks and `( )` groups intact inside each piece. Read as PowerShell, a script
@@ -110,12 +141,21 @@ function splitTopLevel(src: string, ps = false): { segments: string[]; seps: str
   let paren = 0; // depth of $( ) and ( )
   let backtick = false;
   let unclosedBrace = false;
+  let unclosedSubstitution = false;
   const flush = (sep = "") => { const t = cur.trim(); if (t) { segments.push(t); seps.push(sep); } cur = ""; };
 
   for (let i = 0; i < src.length; i++) {
     const c = src[i];
     const n = src[i + 1];
     if (ps && c === "`") { cur += c + (n ?? ""); i++; continue; }
+    // A POSIX command substitution, unquoted or inside double quotes, is kept whole: its quotes are its own.
+    if (!ps && !backtick && quote !== "'" && c === "$" && n === "(") {
+      const end = substitutionEnd(src, i + 2);
+      if (end < 0) { unclosedSubstitution = true; cur += src.slice(i); break; }
+      cur += src.slice(i, end + 1);
+      i = end;
+      continue;
+    }
     if (quote) {
       cur += c;
       if (quote === "'") { if (c === "'") quote = null; }
@@ -158,7 +198,7 @@ function splitTopLevel(src: string, ps = false): { segments: string[]; seps: str
     cur += c;
   }
   flush();
-  return { segments, seps, unbalanced: quote !== null || paren !== 0 || backtick || unclosedBrace };
+  return { segments, seps, unbalanced: quote !== null || paren !== 0 || backtick || unclosedBrace || unclosedSubstitution };
 }
 
 /** A command line split at its top-level separators, with the separator after each part (`|` for a pipe), here-documents
@@ -196,6 +236,14 @@ function extractSubstitutions(seg: string, ps = false): { outer: string; inner: 
     inner.push(seg.slice(start, depth === 0 ? j - 1 : j));
     return j - 1;
   };
+  // Read as POSIX, a substitution or group ends where the shell ends it, its own quotes honored (`$(echo ")")`).
+  const posixGroup = (start: number): number => {
+    const end = substitutionEnd(seg, start);
+    const close = end < 0 ? seg.length : end;
+    inner.push(seg.slice(start, close));
+    return close;
+  };
+  const groupAt = ps ? group : posixGroup;
   for (let i = 0; i < seg.length; i++) {
     const c = seg[i];
     const n = seg[i + 1];
@@ -221,7 +269,7 @@ function extractSubstitutions(seg: string, ps = false): { outer: string; inner: 
       i = end;
       continue;
     }
-    if (c === "$" && n === "(") { i = group(i + 2); outer += SUBST; continue; }
+    if (c === "$" && n === "(") { i = groupAt(i + 2); outer += SUBST; continue; }
     if (quote === '"') {
       outer += c;
       if (!ps && c === "\\" && n !== undefined) outer += seg[++i];
@@ -231,7 +279,7 @@ function extractSubstitutions(seg: string, ps = false): { outer: string; inner: 
     if (c === "'" || c === '"') { quote = c; outer += c; continue; }
     if (!ps && c === "\\" && n !== undefined) { outer += c + seg[++i]; continue; }
     if (c === "(" && n === ")") { outer += "()"; i++; continue; }
-    if (c === "(") { i = group(i + 1); continue; }
+    if (c === "(") { i = groupAt(i + 1); continue; }
     outer += c;
   }
   return { outer, inner };

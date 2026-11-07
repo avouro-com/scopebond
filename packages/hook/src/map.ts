@@ -1482,6 +1482,59 @@ function selfDisable(sc: SimpleCommand): boolean {
  *  would otherwise read as switching Scopebond off. */
 const NAMES_SCOPEBOND_ITSELF = /\.scopebond\b|@scopebond\/|\bscopebond-(?:hook|agent|mcp|gateway)\b|(?:^|[\s"'`;&|(])scopebond(?:\.cmd|\.exe)?(?=$|[\s"'`;&|)])/i;
 
+/** Where the word `scopebond` ends an identifier of something else rather than naming Scopebond: followed by the end, a space,
+ *  a quote or a separator, never by a character that could make it a pattern (`*`, `?`, `[`, `{`, `.`) or join it to more
+ *  text (`$x`). */
+const NAME_END = String.raw`(?=$|[\s"'\`;&|()<>,:#/])`;
+/** The words after `scopebond-` that are, or could be, Scopebond's own (`scopebond-agent`, `scopebond-tray`, the hook's
+ *  `.scopebond-backup` copies, the installer's `scopebond-updater`, …). */
+const OWN_SUFFIXES = [
+  "agent", "hook", "tray", "mcp", "gateway", "update", "backup", "native", "install", "uninstall", "setup", "daemon", "service",
+  "helper", "launch", "cli", "bin", "app", "verify", "policy", "receipt", "machine", "engine", "core", "sdk", "framework",
+];
+/** Whether the rest of a `scopebond-<rest>` word is, or could stand for, one of Scopebond's own names: it begins with one
+ *  (`scopebond-agent.exe`, `scopebond-hooks`), or it is the start of one, which a substring search such as `pkill -f
+ *  scopebond-ag` matches. */
+const ownSuffix = (rest: string): boolean => {
+  const r = rest.toLowerCase();
+  return OWN_SUFFIXES.some((own) => r.startsWith(own) || own.startsWith(r));
+};
+/** `scopebond-<word>` that may be the name of something else (a repository such as `acme/scopebond-docs`, a branch): a word
+ *  of letters, digits and dashes, not after `.` or `@` (`.scopebond-x`, `@scopebond-x`). Taken out only when the word is not
+ *  `ownSuffix`. */
+// eslint-disable-next-line security/detect-non-literal-regexp -- built once from the fixed strings above
+const OTHER_HYPHENATED = new RegExp(String.raw`(?<![.@\w-])scopebond-([a-z0-9][a-z0-9-]*)(?:\.git)?${NAME_END}`, "gi");
+/** The website and its subdomains (`https://scopebond.com/docs`, `api.scopebond.com`). */
+// eslint-disable-next-line security/detect-non-literal-regexp -- built once from the fixed strings above
+const WEBSITE = new RegExp(String.raw`(?<![\w.-])(?:[a-z0-9-]+\.)*scopebond\.com${NAME_END}`, "gi");
+/** Folders that hold installed programs, their settings or their logs: a folder `scopebond` in one of them is (or could be)
+ *  Scopebond's own install (`Programs/Scopebond`, `Program Files/Scopebond`, `Application Support/Scopebond`,
+ *  `node_modules/.bin/scopebond`), never a project's checkout. */
+const INSTALL_PARENTS = new Set([
+  "programs", "files", "support", "programdata", "appdata", "local", "roaming", "bin", ".bin", "sbin", "libexec", "lib", "lib64",
+  "share", "node_modules", "opt", "etc", "library", "applications", "launchagents", "launchdaemons", "privilegedhelpertools",
+  "preferences", "logs", "var", "usr", "config", ".config", ".local", "cache", "caches", "state", "scopebond",
+]);
+/** A folder or repository named `scopebond` inside an ordinary parent: a checkout (`~/code/acme/scopebond`), a repository
+ *  (`acme/scopebond`, `github.com/acme/scopebond.git`). The parent is plain letters, digits, `.`, `_` and `-`, not part of a
+ *  variable (`$HOME/scopebond`, `%APPDATA%/scopebond`) or after `~`, and not a folder in `INSTALL_PARENTS`. */
+// eslint-disable-next-line security/detect-non-literal-regexp -- built once from the fixed strings above
+const CHECKOUT = new RegExp(String.raw`(?<![\w.$%{}~-])([\w.-]+)/scopebond(?:\.git)?${NAME_END}`, "gi");
+
+/** Whether text that could not be read names Scopebond itself (its folder, a program, a package, a launchd label, an install
+ *  folder, an environment variable, a Windows short name), rather than only containing the word inside the name of something
+ *  else: a repository (`acme/scopebond-docs`, `acme/scopebond`), a checkout folder (`~/code/acme/scopebond`), the website
+ *  (`scopebond.com`). Those three are taken out and whatever is left is judged as before: any `scopebond` (or `scopeb~1`)
+ *  still in it counts. */
+function namesScopebondPosix(text: string): boolean {
+  if (!/scopeb/i.test(text)) return false;
+  const rest = text
+    .replace(OTHER_HYPHENATED, (whole: string, rest: string) => (ownSuffix(rest) ? whole : " "))
+    .replace(WEBSITE, " ")
+    .replace(CHECKOUT, (whole: string, parent: string) => (INSTALL_PARENTS.has(parent.toLowerCase()) ? whole : `${parent}/ `));
+  return /scopebond|scopeb~\d/i.test(rest);
+}
+
 /** Programs that only search text: a word given to one of them is a pattern or a file to read, never a file it writes. */
 const SEARCH_PROGRAMS = new Set(["grep", "egrep", "fgrep", "rg", "ag", "ack", "findstr", "select-string", "sls"]);
 /** A mention of Scopebond's folder or its connection file: a path, which a search reads, so never let through here. */
@@ -1542,12 +1595,12 @@ function isSearchPart(part: string): boolean {
  *  `\` as a path separator leaves a quote open, and the whole text used to count as switching Scopebond off. A part that
  *  is not a search, a redirect's target, an argument that runs code, or a mention of Scopebond's folder (a search reads the
  *  files it names) all still count. */
-function mentionsOnlyInSearch(text: string, names: RegExp): boolean {
+function mentionsOnlyInSearch(text: string, names: (part: string) => boolean): boolean {
   if (text.length > SEARCH_SCAN_LIMIT) return false;
   let mentioned = false;
   for (const quoting of ["cmd", "powershell"] as const) {
     for (const part of windowsParts(text, quoting)) {
-      if (!names.test(part.text)) continue;
+      if (!names(part.text)) continue;
       mentioned = true;
       if (part.runsCode || NAMES_SCOPEBOND_FOLDER.test(part.text) || !isSearchPart(part.text)) return false;
     }
@@ -1613,10 +1666,11 @@ function mapSimpleCommand(sc: SimpleCommand, dir: string, cwd?: string, windowsR
       evaluated: true, source: "shell",
     }];
     // A command that cannot be read but names Scopebond (`eval "$X @scopebond/hook uninstall"`) is treated as switching it off:
-    // self-protection never depends on a readable command. In the Windows reading of a command the POSIX
-    // reading already understood, only a reference to Scopebond itself counts, not the word anywhere.
-    const names = windowsReading ? NAMES_SCOPEBOND_ITSELF : /scopebond/i;
-    if (names.test(sc.raw) && !(searchReading && mentionsOnlyInSearch(sc.raw, names))) opaque.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
+    // self-protection never depends on a readable command. The word inside the name of something else (a repository such as
+    // `acme/scopebond-docs`, a checkout folder, the website) does not count (namesScopebondPosix). In the Windows reading of a
+    // command the POSIX reading already understood, only a reference to Scopebond itself counts.
+    const names = windowsReading ? (t: string) => NAMES_SCOPEBOND_ITSELF.test(t) : namesScopebondPosix;
+    if (names(sc.raw) && !(searchReading && mentionsOnlyInSearch(sc.raw, names))) opaque.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
     // A place the always-on protection guards that it names may be read or changed by it: recorded as both, so the floor
     // judges it as it would the command written out (`{cp,a,~/.claude/settings.json}`, a function that changes it).
     if (!windowsReading) opaque.push(...mentionedPlaces(sc.raw, dir, cwd));
@@ -2060,7 +2114,7 @@ function mapShellCall(command: string, cwd?: string, dialect: "posix" | "powersh
         const runsScopebond = (c: SimpleCommand) => NAMES_SCOPEBOND_ITSELF.test(c.programRaw || c.program)
           // eslint-disable-next-line security/detect-unsafe-regex -- bounded: fixed words with optional fixed suffixes
           || (/^(?:npx|pnpx|bunx|pnpm|yarn)(?:\.cmd|\.exe)?$/i.test(c.program) && c.argv.some((a) => /@scopebond\/|^scopebond(?:-\w+)?$/i.test(a)));
-        if ((/\.scopebond\b/i.test(win) || closed.some(runsScopebond)) && !mentionsOnlyInSearch(win, NAMES_SCOPEBOND_ITSELF)) out.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
+        if ((/\.scopebond\b/i.test(win) || closed.some(runsScopebond)) && !mentionsOnlyInSearch(win, (t) => NAMES_SCOPEBOND_ITSELF.test(t))) out.push(...pathIntents("file.write", ".scopebond/policy.json", "shell"));
       }
     }
     for (const m of walk(reading, true)) {
