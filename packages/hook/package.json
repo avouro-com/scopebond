@@ -51,7 +51,7 @@
     "build": "tsc -p tsconfig.json && node scripts/bundle-cli.mjs",
     "prepublishOnly": "tsc -p tsconfig.json && node scripts/bundle-cli.mjs",
     "bench": "node scripts/bench-hook.mjs",
-    "test": "tsc -p tsconfig.json && node scripts/bundle-cli.mjs && node --test --test-timeout=300000 test/*.test.mjs test/*.test.js && node --test --test-timeout=1800000 test/windows-journey.run.mjs"
+    "test": "tsc -p tsconfig.json && node scripts/bundle-cli.mjs && node --test --import ./test/isolate-home.mjs --test-timeout=300000 test/*.test.mjs test/*.test.js && node --test --import ./test/isolate-home.mjs --test-timeout=1800000 test/windows-journey.run.mjs"
   },
   "publishConfig": {
     "access": "public"
