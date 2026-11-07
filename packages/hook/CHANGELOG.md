@@ -1,5 +1,12 @@
 # @scopebond/hook
 
+## 0.33.3
+
+### Patch Changes
+
+- 018bf32: Claude Code's sub-agent and task-list tools (`SendMessage`, `ListAgents`, `ReadNotifications`, `TaskCreate`, `TaskUpdate`, `TaskList`, `TaskGet`) are known as harmless and recorded, as `Agent` and `TodoWrite` already were, instead of refused as unknown. Tools that start work later or elsewhere (`Monitor`, `CronCreate`, `ScheduleWakeup`, `RemoteTrigger`, `Workflow`, `PushNotification`, `SendUserFile`) stay refused until a rule names them.
+- 6e8b71f: Running a tool's output as shell code (`eval "$(fnm env)"`, `eval "$(pyenv init -)"`, `source <(kubectl completion zsh)`) is no longer blocked by safe-shell. When the command whose output runs is one plain command, read to its end, that does not print text the command line, a file or the network decides, its output is judged as running that command is, and the record names whose output ran. Output from `echo`, `printf`, `cat`, `sed`, `curl`, `git`, a decoder, inline code (`python3 -c`), a variable or anything piped in is still denied, and `source` or `.` of such a process substitution is now denied too.
+
 ## 0.33.2
 
 ### Patch Changes
