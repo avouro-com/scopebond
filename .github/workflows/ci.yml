@@ -77,7 +77,8 @@ jobs:
         working-directory: packages/hook
         env:
           SHARD: ${{ matrix.part == 'hook-1' && '1/2' || '2/2' }}
-        run: node --test --test-timeout=300000 "--test-shard=$env:SHARD" test/*.test.mjs test/*.test.js
+        # The same isolated home as the package's own test script (test/isolate-home.mjs): no test reads the runner's profile.
+        run: node --test --import ./test/isolate-home.mjs --test-timeout=300000 "--test-shard=$env:SHARD" test/*.test.mjs test/*.test.js
       - name: Every other package (tsc build, then node --test)
         if: matrix.part == 'packages'
         run: pnpm -r --filter "!@scopebond/hook" test
