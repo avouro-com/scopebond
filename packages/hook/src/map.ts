@@ -2267,6 +2267,16 @@ function mapClaudeToolUseRaw(input: Record<string, unknown>): Mapped[] {
     return mapShell(textOf(ti.command), cwd);
   if (name === "PowerShell")
     return mapShell(textOf(ti.command), cwd, "powershell");
+  // Monitor runs a shell command in the background and streams its output back: the command is checked as Bash's is.
+  if (name === "Monitor")
+    return mapShell(textOf(ti.command), cwd);
+  // SendUserFile sends files to the person's own devices: each file is a read, checked like Read, so a file the always-on
+  // protection keeps from being read (Scopebond's keys and connection) cannot be sent either.
+  if (name === "SendUserFile") {
+    const files = Array.isArray(ti.files) ? ti.files : [];
+    const reads = files.flatMap((f) => pathIntents("file.read", rel(f, cwd), name));
+    return reads.length ? reads : [{ intent: { action_type: "tool.senduserfile", params: {} }, evaluated: false, source: name }];
+  }
   if (name === "Write" || name === "Edit" || name === "MultiEdit")
     return pathIntents("file.write", rel(ti.file_path, cwd), name);
   if (name === "NotebookEdit")

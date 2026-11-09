@@ -102,7 +102,7 @@ for (const mode of ["monitor", "enforce"]) {
 }
 
 test("SlashCommand and the MCP resource tools are not known-safe: refused like any unknown tool", async () => {
-  for (const name of ["SlashCommand", "ListMcpResourcesTool", "ReadMcpResourceTool", "Monitor", "CronCreate", "ScheduleWakeup", "RemoteTrigger", "Workflow", "PushNotification", "SendUserFile"]) {
+  for (const name of ["SlashCommand", "ListMcpResourcesTool", "ReadMcpResourceTool", "CronCreate", "ScheduleWakeup", "RemoteTrigger", "Workflow", "PushNotification"]) {
     for (const harness of ["claude", "copilot"]) {
       const { dir } = setup();
       const actions = MAPPERS[harness](name, {}, dir);
@@ -136,6 +136,27 @@ test("strict mode keeps its meaning: an unknown tool goes to the policy, an unre
   assert.ok(patch.some((m) => !m.evaluated && m.unknownTool === undefined));
   assert.notEqual((await runtime(dir).evaluate(patch)).decision, "deny");
   assert.equal((await runtime(dir, { strict: true }).evaluate(patch)).decision, "deny");
+});
+
+test("Claude Code Monitor is its command, checked as Bash's: a push to main is the push, a log tail is allowed", async () => {
+  const { dir } = setup({ enforce: true });
+  const tail = MAPPERS.claude("Monitor", { command: "tail -f build.log", description: "build" }, dir);
+  assert.ok(tail.every((m) => m.unknownTool === undefined));
+  assert.equal((await runtime(dir).evaluate(tail)).decision, "allow");
+  const push = MAPPERS.claude("Monitor", { command: "git push origin HEAD:main" }, dir);
+  assert.ok(push.some((m) => m.intent.action_type === "git.push"));
+  assert.equal((await runtime(dir).evaluate(push)).decision, "deny");
+});
+
+test("Claude Code SendUserFile is a read of each file: a project file is allowed, Scopebond's own folder is refused", async () => {
+  const { dir } = setup();
+  const shot = MAPPERS.claude("SendUserFile", { files: [join(dir, "docs/shot.png"), "report.md"], status: "normal" }, dir);
+  assert.deepEqual(shot.map((m) => [m.intent.action_type, m.intent.params.path]), [["file.read", "docs/shot.png"], ["file.read", "report.md"]]);
+  assert.equal((await runtime(dir).evaluate(shot)).decision, "allow");
+  const own = MAPPERS.claude("SendUserFile", { files: [join(".scope" + "bond", "agent.key")] }, dir);
+  assert.equal((await runtime(dir).evaluate(own)).decision, "deny");
+  const none = MAPPERS.claude("SendUserFile", {}, dir);
+  assert.equal(none[0].unknownTool, undefined);
 });
 
 test("Codex view_image is a checked read of the image file", () => {
