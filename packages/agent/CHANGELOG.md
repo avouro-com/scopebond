@@ -1,5 +1,13 @@
 # @scopebond/agent
 
+## 0.13.4
+
+### Patch Changes
+
+- c0d54a0: Claude Code's `Monitor` and `SendUserFile` tools are checked instead of refused as unknown. `Monitor` runs a shell command in the background, so its command is checked as `Bash`'s is: a push to main through it meets the branch rule, and a log tail runs. `SendUserFile` sends files to the person's own devices, so each file is checked as a read: a project file goes, and a file in Scopebond's own folder stays refused. In Monitor mode both are recorded, as every other mapped tool is.
+- Updated dependencies [c0d54a0]
+  - @scopebond/hook@0.33.4
+
 ## 0.13.3
 
 ### Patch Changes
