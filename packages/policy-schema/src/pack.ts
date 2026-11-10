@@ -25,6 +25,7 @@
 import { canonical } from "./canonical.js";
 import { getActionType } from "./registry.js";
 import { allowPatternErrors } from "./allow-patterns.js";
+import { PACK_PATTERN_MAX, patternProblem } from "./pattern.js";
 
 export const PACK_FORMAT = "scopebond:pack/v1";
 /** The pack engine level this release implements (see "Engine levels" above). */
@@ -55,7 +56,7 @@ export const PACK_LIMITS = {
   maxPathWords: 8,
   maxList: 1000,
   maxDepth: 10,
-  maxPattern: 200,
+  maxPattern: PACK_PATTERN_MAX,
   maxString: 2000,
 } as const;
 
@@ -232,11 +233,6 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 // eslint-disable-next-line security/detect-unsafe-regex -- linear: each repeat starts at a dot the one before it cannot contain
 const ACTION_TYPE = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/;
 const RULE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
-// A group that is itself repeated and holds a repeat (`(a+)+`, `(a*)*`, `(a|aa)+` with a quantifier inside) can backtrack
-// exponentially. Patterns run only on words the engine first cuts to a bounded length, and a pack is signed data; this is
-// the static check on top.
-const NESTED_REPEAT = /\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)[+*{]/;
-
 // ---- a rule's allow patterns ----------------------------------------------------------------------------------------------
 // The recipes a rule carries for pattern allowances ("Similar commands in this project"): their shape and check are the pattern
 // allowances module's (allow-patterns.ts).
@@ -294,10 +290,10 @@ class Checker {
 
   pattern(value: unknown, at: string): value is string {
     if (!this.string(value, at, undefined, PACK_LIMITS.maxPattern)) return false;
-    if (NESTED_REPEAT.test(value)) return this.fail(at, "a repeated group that holds a repeat is not allowed (it can backtrack)");
-    if (/\\[1-9]|\(\?<[=!]/.test(value)) return this.fail(at, "back-references and look-behind are not allowed");
-    // eslint-disable-next-line security/detect-non-literal-regexp -- compiled only to check that it parses; never matched here
-    try { new RegExp(value); } catch { return this.fail(at, "is not a valid regular expression"); }
+    // Patterns run only on words the engine first cuts to a bounded length, and a pack is signed data; this is the static
+    // check on top, the same one every policy pattern passes (pattern.ts): no shape that can backtrack catastrophically.
+    const problem = patternProblem(value, PACK_LIMITS.maxPattern);
+    if (problem) return this.fail(at, problem);
     return true;
   }
 

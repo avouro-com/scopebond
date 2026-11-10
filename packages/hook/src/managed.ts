@@ -40,6 +40,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, 
 import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { canonical } from "@scopebond/policy-schema/canonical";
+import { POLICY_PATTERN_MAX, patternProblem } from "@scopebond/policy-schema/pattern";
 import { GUARDRAIL_LOOKAHEADS, SAFE_SHELL_PARAM, ci } from "./runtime.js";
 import { compile, defaultRules, loadRules, type RuleSet, ENFORCEABLE_RULES, SWITCHABLE_RULES } from "./rules.js";
 import { TARGET_RULES } from "./target-rules.js";
@@ -645,11 +646,37 @@ export function writeAtomic(file: string, text: string): void {
   catch (error) { try { rmSync(temp, { force: true }); } catch { /* nothing to remove */ } throw error; }
 }
 
+/** The first pattern in a compiled policy that the shared pattern check refuses (`@scopebond/policy-schema/pattern`), as
+ *  where it is and why; null when every pattern passes. The verifier refuses such a policy as a whole, so a document that
+ *  compiles to one is refused before anything is written and the rules in force stay. */
+function refusedPattern(policy: Record<string, unknown>): string | null {
+  type Bound = { pattern?: unknown; items?: { pattern?: unknown } };
+  const clauses = Array.isArray(policy.clauses) ? (policy.clauses as Array<Record<string, unknown>>) : [];
+  for (const clause of clauses) {
+    const sets: Array<[string, Record<string, Bound> | undefined]> = [
+      ["param_bounds", clause.param_bounds as Record<string, Bound> | undefined],
+      ...((Array.isArray(clause.exceptions) ? clause.exceptions : []) as Array<Record<string, Bound>>).map((e, i): [string, Record<string, Bound>] => [`exceptions[${i}]`, e]),
+    ];
+    for (const [where, bounds] of sets) {
+      for (const [field, bound] of Object.entries(bounds ?? {})) {
+        for (const pattern of [bound?.pattern, bound?.items?.pattern]) {
+          if (pattern === undefined) continue;
+          const problem = patternProblem(pattern, POLICY_PATTERN_MAX);
+          if (problem) return `rule ${String(clause.id)}, ${where} ${field}: ${problem}`;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 /** Install a checked document: write the merged policy (previous kept) and the document. `policyBuilds` is the caller's check
  *  that the gateway can load the result. */
 export function installManaged(dir: string, doc: ManagedDocument, agentKid: string, policyBuilds: (policy: Record<string, unknown>) => boolean): { ok: true } | { ok: false; reason: RefusalReason; message: string } {
   const local = loadRules(dir) ?? defaultRules();
   const policy = compileManaged(local, doc, agentKid);
+  const refused = refusedPattern(policy);
+  if (refused) return { ok: false, reason: "invalid_document", message: `the workspace rules compile to a pattern this computer refuses (${refused}); the rules in force stay` };
   if (!policyBuilds(policy)) return { ok: false, reason: "unsupported", message: "this version of Scopebond cannot load the workspace rules; update it" };
   try {
     mkdirSync(dir, { recursive: true });

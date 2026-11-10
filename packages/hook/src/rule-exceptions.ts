@@ -84,7 +84,8 @@ export function localDatabaseUrl(text: string): string | null {
 
 /** A context or workspace name: exact, or with `*` standing for any text (twice at most), as long as some text is named. */
 const validNamePattern = (v: string): boolean => NAME_PATTERN.test(v) && v.replace(/\*/g, "") !== "" && v.split("*").length <= 3;
-const namePattern = (values: readonly string[]): string => `^(?:${values.map((v) => v.split("*").map(escapeRegex).join(".*")).join("|")})$`;
+// Stars next to each other mean what one does (`a**` is `a*`): written as one, the pattern keeps one wildcard there.
+const namePattern = (values: readonly string[]): string => `^(?:${values.map((v) => v.replace(/\*+/g, "*").split("*").map(escapeRegex).join(".*")).join("|")})$`;
 const exactPattern = (values: readonly string[]): string => `^(?:${values.map(escapeRegex).join("|")})$`;
 
 const VALID: Record<ExceptionField, (v: string) => boolean> = {

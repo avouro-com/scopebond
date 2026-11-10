@@ -211,8 +211,9 @@ unknown field or operator as a whole.
 
 **Signing.** Ed25519 over the UTF-8 bytes of `scopebond:pack/v1`, one LF, then the RFC 8785
 canonical pack without its `signature` member (`packSigningInput`), with a policy-signing
-key. Patterns are limited to 200 characters, may not repeat a group that holds a repeat,
-and run only on words cut to 512 characters. `validatePack` checks the shape and the
+key. Patterns are limited to 200 characters, must pass the shared pattern check (`./pattern`:
+`patternProblem` refuses back-references, look-behind and every shape that can backtrack
+catastrophically), and run only on words cut to 512 characters. `validatePack` checks the shape and the
 cross-field rules (unique ids, no program read by two grammars, registered action types,
 command-line operators only in grammars and MCP ones only in profiles); the signature is
 the engine's to verify.
