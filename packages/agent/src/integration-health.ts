@@ -5,6 +5,7 @@ import {
 } from "@scopebond/hook";
 import { executionEnvironment, type ExecutionEnvironment } from "./execution-environment.js";
 import type { HookCallbackActivity } from "./hook-activity.js";
+import { hookPins, type HookPin } from "./hook-pin.js";
 
 export interface IntegrationHealth {
   harness: Harness;
@@ -23,6 +24,9 @@ export interface IntegrationHealth {
   delivery: "unknown";
   checked_at: number;
   scope: { profile: IntegrationProfile; execution: ExecutionEnvironment; coverage: "current_environment_only"; other_environments: "not_verified"; action: "install_on_execution_host" };
+  /** The installed hook entry compared with the exact one this agent writes (hook-pin.ts): intact, or tampered and what
+   *  differs. */
+  pin: Omit<HookPin, "harness">;
 }
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -33,12 +37,15 @@ function entries(value: unknown): number {
 }
 
 /** Configuration inspection only. No fixture, process, or successful write can create runtime proof. */
-export function integrationHealth(harnesses: readonly Harness[], now = Date.now(), dir?: string): IntegrationHealth[] {
+export function integrationHealth(harnesses: readonly Harness[], now = Date.now(), dir?: string, options: { expected?: (harness: Harness) => string } = {}): IntegrationHealth[] {
   const stateDir = dir ?? userHome();
   const intent = readIntegrationIntent(stateDir);
   const profile = integrationProfile(stateDir, {}, { create: dir !== undefined });
   const execution = executionEnvironment();
-  return harnesses.map((harness) => {
+  const pins = hookPins(harnesses, { dir: stateDir, expected: options.expected }).tools;
+  return harnesses.map((harness, index) => {
+    const found = pins[index];
+    const pin = { state: found.state, expected_digest: found.expected_digest, installed_digests: found.installed_digests, deviations: found.deviations };
     const adapter = ADAPTERS[harness];
     let presence: IntegrationHealth["presence"] = "unknown";
     let local = false;
@@ -51,6 +58,7 @@ export function integrationHealth(harnesses: readonly Harness[], now = Date.now(
       capabilities: { supported: adapter.capabilities, verified: [] },
       license: { state: "unknown", scope: "legacy_computer" }, delivery: "unknown", checked_at: now,
       scope: { profile, execution, coverage: "current_environment_only", other_environments: "not_verified", action: "install_on_execution_host" },
+      pin,
     };
     if (intent.excluded.includes(harness)) return { ...health, integration: "disabled", reason: "excluded" };
     if (!local || profile.state === "mismatch" || profile.state === "unknown") return { ...health, integration: "repair_failed", reason: "profile_boundary" };

@@ -1,0 +1,5 @@
+---
+"@scopebond/agent": minor
+---
+
+The agent now checks that each coding tool's hook entry is exactly the one it writes: the same program and the same arguments. Before, any entry that looked like a Scopebond hook passed. Now each of these is reported as tamper: another program, changed arguments, a wrapper around the command, a missing entry, Claude Code's `disableAllHooks`, or an integration-intent file that cannot be read. Where the agent already repairs entries, it writes the expected entry back. A corrupt integration-intent file is also written back with its defaults. `disableAllHooks` is your own setting in the coding tool, so the agent reports it but leaves it on. An npm install under the workspace's "hold" setting only reports changed entries. The daily self-check sends a new `hook_integrity` field. It lists each tool's state and what was different, with digests only and never a file's contents. It also lists the tamper found since the last report and whether it was repaired. Workspaces that do not read the field ignore it.

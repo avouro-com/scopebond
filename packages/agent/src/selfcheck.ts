@@ -18,6 +18,7 @@ import { hookCli } from "./commands.js";
 import { missingPrograms } from "./hook-entries.js";
 import { discoverTools, type ToolDiscovery } from "./tools.js";
 import { integrationHealth } from "./integration-health.js";
+import { hookPins, type HookPin, type IntentState, type TamperFinding } from "./hook-pin.js";
 
 export interface SelfCheckItem { id: string; ok: boolean; detail?: string }
 
@@ -51,7 +52,23 @@ export function localChecks(dir: string, connection: HookConnection, harnesses: 
   return checks;
 }
 
-export interface SelfCheckResult extends ToolDiscovery { ok: boolean; signature_verified: boolean; failed: string[]; checks: SelfCheckItem[] }
+/** Sent with every self-check (a workspace that does not read it ignores it): each coding tool's hook entry compared with
+ *  the exact one this agent writes, as it is now, and the tamper found since the last report with whether it was repaired.
+ *  Names what differs and digests only, never a file's contents. */
+export interface HookIntegrity { version: 1; intent: IntentState; tools: HookPin[]; found: TamperFinding[] }
+
+export interface SelfCheckResult extends ToolDiscovery {
+  ok: boolean; signature_verified: boolean; failed: string[]; checks: SelfCheckItem[];
+  hook_integrity?: HookIntegrity;
+  /** Whether the workspace took the report (and with it the tamper found); kept for the next one otherwise. */
+  integrity_reported?: boolean;
+}
+
+/** The hook integrity report: the tools on this computer as they are now, and what was found earlier. */
+export function hookIntegrity(harnesses: readonly Harness[], dir: string | undefined, found: readonly TamperFinding[] = [], expected?: (harness: Harness) => string): HookIntegrity {
+  const pins = hookPins(harnesses, { dir, expected });
+  return { version: 1, intent: pins.intent, tools: pins.tools.filter((t) => t.state !== "not_checked"), found: [...found] };
+}
 
 /** Which coding tools this computer has, for the self-check; an empty report when finding out fails. */
 async function toolReport(discover: () => Promise<ToolDiscovery>): Promise<ToolDiscovery> {
@@ -60,15 +77,18 @@ async function toolReport(discover: () => Promise<ToolDiscovery>): Promise<ToolD
 
 export async function runSelfCheck(
   dir: string, connection: HookConnection, harnesses: Harness[], agentVersion: string,
-  options: { fetchImpl?: typeof fetch; now?: number; timeoutMs?: number; discover?: () => Promise<ToolDiscovery> } = {},
+  options: { fetchImpl?: typeof fetch; now?: number; timeoutMs?: number; discover?: () => Promise<ToolDiscovery>; tamper?: readonly TamperFinding[]; expected?: (harness: Harness) => string } = {},
 ): Promise<SelfCheckResult | null> {
   const now = options.now ?? Date.now();
   const checks = localChecks(dir, connection, harnesses, now);
+  let hook_integrity: HookIntegrity | undefined;
+  try { hook_integrity = hookIntegrity(harnesses, dir, options.tamper, options.expected); } catch { /* the report goes without it */ }
   // The AI coding tools on this computer and whether the hook checks them, with the names of their MCP servers: sent with
   // every self-check, so the workspace shows what the computer last reported (see tools.ts for exactly what is read).
   const { tools, mcp_servers } = await toolReport(options.discover ?? (() => discoverTools()));
+  const local = { checks, tools, mcp_servers, ...(hook_integrity ? { hook_integrity } : {}) };
   const keyFile = join(dir, "attester.key");
-  if (!existsSync(keyFile)) return { ok: false, signature_verified: false, failed: ["signing_key"], checks, tools, mcp_servers };
+  if (!existsSync(keyFile)) return { ok: false, signature_verified: false, failed: ["signing_key"], ...local, integrity_reported: false };
   const day = new Date(now).toISOString().slice(0, 10);
   const { attester } = loadOrCreateAttester({ file: keyFile });
   const signature = await attester.sign(selfCheckProof(connection.credential_id, connection.gateway_id, day));
@@ -77,16 +97,17 @@ export async function runSelfCheck(
       method: "POST", redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
       headers: { authorization: `Bearer ${connection.credential}`, "content-type": "application/json" },
       // install_kind: how this agent was installed (npm, per-user or per-machine signed installer), so the workspace can say
-      // how the computer updates and is removed. A workspace that does not read it ignores it.
-      body: JSON.stringify({ signature, day, checks, hook_version: hookVersion(), agent_version: agentVersion, install_kind: installKind(), tools, mcp_servers }),
+      // how the computer updates and is removed; hook_integrity: whether each hook entry is exactly the one this agent writes.
+      // A workspace that does not read them ignores them.
+      body: JSON.stringify({ signature, day, checks, hook_version: hookVersion(), agent_version: agentVersion, install_kind: installKind(), tools, mcp_servers, ...(hook_integrity ? { hook_integrity } : {}) }),
     });
     // A workspace that does not offer the self-check yet answers 404: the computer's own checks still count; the signed
     // workspace part is simply not available there.
-    if (res.status === 404) { const failed = checks.filter((c) => !c.ok).map((c) => c.id); return { ok: failed.length === 0, signature_verified: false, failed, checks, tools, mcp_servers }; }
-    if (!res.ok) return { ok: false, signature_verified: false, failed: [`workspace_http_${res.status}`], checks, tools, mcp_servers };
+    if (res.status === 404) { const failed = checks.filter((c) => !c.ok).map((c) => c.id); return { ok: failed.length === 0, signature_verified: false, failed, ...local, integrity_reported: false }; }
+    if (!res.ok) return { ok: false, signature_verified: false, failed: [`workspace_http_${res.status}`], ...local, integrity_reported: false };
     const body = await res.json() as { ok?: boolean; signature_verified?: boolean; failed?: string[] };
-    return { ok: !!body.ok, signature_verified: !!body.signature_verified, failed: Array.isArray(body.failed) ? body.failed : [], checks, tools, mcp_servers };
+    return { ok: !!body.ok, signature_verified: !!body.signature_verified, failed: Array.isArray(body.failed) ? body.failed : [], ...local, integrity_reported: true };
   } catch (error) {
-    return { ok: false, signature_verified: false, failed: [`workspace_unreachable: ${(error as Error).message.slice(0, 80)}`], checks, tools, mcp_servers };
+    return { ok: false, signature_verified: false, failed: [`workspace_unreachable: ${(error as Error).message.slice(0, 80)}`], ...local, integrity_reported: false };
   }
 }
