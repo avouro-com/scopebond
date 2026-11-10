@@ -104,6 +104,14 @@ claim-time verification over the full receipt set is unaffected.
 `endpoint_denylist`, `address_allowlist` / `address_denylist`,
 `contract_allowlist`, `action_allowlist` (param bounds and exceptions), `key_policy`.
 
+`spend_limit` compares assets with case, width and surrounding space taken away
+(`usdc` is limited as `USDC`). A clause may name the money actions it covers in
+`action_types`: an action of a listed type must then carry an asset this policy
+limits for that type and an amount, or it is denied, so an action spelled with
+another asset or no amount cannot pass as spending nothing. Without
+`action_types`, a clause covers the actions in its asset, and an action that
+carries an amount without an asset is denied.
+
 Endpoint clauses compare `endpointDestination(host)`: the host as the WHATWG URL
 parser (and so `fetch`) reads it, with every spelling of an address in one form and an
 IPv4-mapped IPv6 address as its IPv4 address. An allowlist entry allows exactly its host

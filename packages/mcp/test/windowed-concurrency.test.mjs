@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { generateKeyPairSync } from "node:crypto";
 import { createInterface } from "node:readline";
 import { createMcpProxy } from "../dist/index.js";
+import { listed } from "./listed.mjs";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const keyPem = () => generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" }).toString();
@@ -36,7 +37,7 @@ const GAP = {
 
 function proxyWith(policy, extra = {}) {
   const forwarded = [];
-  const upstream = { async call(m) { forwarded.push(m); await new Promise((r) => setTimeout(r, 5)); return { jsonrpc: "2.0", id: m.id, result: { content: [] } }; } };
+  const upstream = listed({ async call(m) { forwarded.push(m); await new Promise((r) => setTimeout(r, 5)); return { jsonrpc: "2.0", id: m.id, result: { content: [] } }; } }, ["read_file", "write_file"]);
   const proxy = createMcpProxy({
     policy, principal: { subject: "client:t", issuer: "scopebond:mcp-proxy" }, server: "filesystem",
     attesterKeyPem: keyPem(), argsDigestKey: "ab".repeat(32), upstream, ...extra,
@@ -106,6 +107,7 @@ createInterface({ input: process.stdin, crlfDelay: Infinity }).on("line", (line)
   let m; try { m = JSON.parse(line); } catch { return; }
   appendFileSync(${JSON.stringify(log)}, "RECEIVED " + JSON.stringify(m.method) + " " + JSON.stringify(m.params && m.params.name) + "\\n");
   if (m.id === undefined || m.id === null) return;
+  if (m.method === "tools/list") { process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { tools: [{ name: "read_file" }, { name: "write_file" }] } }) + "\\n"); return; }
   process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "ran " + (m.params && m.params.name) }] } }) + "\\n");
 });
 `;

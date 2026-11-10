@@ -12,7 +12,9 @@ import { endpointDestination, endpointDenylistClauses } from "@scopebond/verify"
 export type HostLookup = (hostname: string) => Promise<ReadonlyArray<{ address: string; family: number }>>;
 
 export interface HttpExecutorOptions {
-  /** Injectable fetch (defaults to global fetch) — makes forwarding testable. */
+  /** Injectable fetch (defaults to global fetch) — makes forwarding testable. Without one, a call whose host name was
+   *  resolved for the endpoint_denylist check connects to the addresses that check approved and never resolves the name
+   *  again; an injected fetch is the caller's own transport and resolves names itself. */
   fetch?: typeof fetch;
   /** URL scheme for forwarded calls (default https). */
   scheme?: "http" | "https";
@@ -155,11 +157,13 @@ function resolvedHost(address: string, port: number | null): string {
 /** Refuse a call whose host name resolves to an address an enforced endpoint_denylist clause denies. The policy decided the
  *  name as written; a clause it already applied (and a person may have overridden) is not applied again. Everything here
  *  happens before any connection, so each refusal is an `ExecutorInputError`: the action is recorded as failed. */
-async function refuseDeniedAddresses(policy: Policy, params: Record<string, unknown>, dest: EndpointDestination, lookup: HostLookup): Promise<void> {
-  if (dest.address) return; // an address was decided as itself
+async function refuseDeniedAddresses(
+  policy: Policy, params: Record<string, unknown>, dest: EndpointDestination, lookup: HostLookup,
+): Promise<ReadonlyArray<{ address: string; family: number }> | undefined> {
+  if (dest.address) return undefined; // an address was decided as itself
   const decided = new Set(endpointDenylistClauses(policy, params).map((c) => c.id));
   const enforced = (c: { id: string; mode?: string }): boolean => c.mode !== "monitor" && !decided.has(c.id);
-  if (!(policy.clauses ?? []).some((c) => c.type === "endpoint_denylist" && enforced(c) && listsAddress(c))) return;
+  if (!(policy.clauses ?? []).some((c) => c.type === "endpoint_denylist" && enforced(c) && listsAddress(c))) return undefined;
   let addresses: Awaited<ReturnType<HostLookup>>;
   try {
     addresses = await lookup(dest.host);
@@ -178,6 +182,50 @@ async function refuseDeniedAddresses(policy: Policy, params: Record<string, unkn
     const denied = endpointDenylistClauses(policy, { ...params, host }).find(enforced);
     if (denied) throw new ExecutorInputError(`http.call host ${dest.host} resolves to ${address}, which endpoint_denylist clause ${denied.id} denies`);
   }
+  return addresses.map(({ address, family }) => ({ address: String(address), family: family === 6 ? 6 : family === 4 ? 4 : String(address).includes(":") ? 6 : 4 }));
+}
+
+// Responses that carry no body, whatever the server sends after the head.
+const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
+
+/** Send one request to the addresses the denylist check already approved, never resolving the name again: a resolver
+ *  that answered the check with one address could otherwise answer the connection with another (DNS rebinding). The
+ *  URL keeps the host name, so the Host header, TLS server name and certificate check are for the name. Behaves as
+ *  `fetch` does with `redirect: "error"`: a redirect is an error, and the body is a stream the caller reads. */
+async function pinnedFetch(url: URL, init: RequestInit & { signal: AbortSignal }, addresses: ReadonlyArray<{ address: string; family: number }>): Promise<Response> {
+  const { request } = url.protocol === "https:" ? await import("node:https") : await import("node:http");
+  const { Readable } = await import("node:stream");
+  const method = (init.method ?? "GET").toUpperCase();
+  const headers: Record<string, string> = {};
+  new Headers(init.headers).forEach((value, name) => { headers[name] = value; });
+  const body = typeof init.body === "string" ? init.body : undefined;
+  if (body !== undefined) headers["content-length"] = String(Buffer.byteLength(body, "utf8"));
+  type LookupCallback = (error: Error | null, address: string | Array<{ address: string; family: number }>, family?: number) => void;
+  const pinned = (_hostname: string, options: { all?: boolean } | LookupCallback, callback?: LookupCallback): void => {
+    const done = (typeof options === "function" ? options : callback) as LookupCallback;
+    if (typeof options === "object" && options?.all) done(null, addresses.map((a) => ({ address: a.address, family: a.family })));
+    else done(null, addresses[0].address, addresses[0].family);
+  };
+  return await new Promise<Response>((resolve, reject) => {
+    const req = request(url, { method, headers, lookup: pinned, agent: false, signal: init.signal }, (res) => {
+      const status = res.statusCode ?? 0;
+      if (status >= 300 && status < 400 && res.headers.location !== undefined) {
+        res.destroy();
+        reject(new TypeError(`the endpoint answered with a redirect (${status}); redirects are not followed`));
+        return;
+      }
+      const empty = method === "HEAD" || NULL_BODY_STATUSES.has(status);
+      if (empty) res.resume();
+      try {
+        resolve(new Response(empty ? null : (Readable.toWeb(res) as ReadableStream<Uint8Array>), { status }));
+      } catch (error) {
+        res.destroy();
+        reject(error instanceof Error ? error : new TypeError(String(error)));
+      }
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
 }
 
 export function createHttpExecutor(opts: HttpExecutorOptions = {}): Executor {
@@ -199,10 +247,15 @@ export function createHttpExecutor(opts: HttpExecutorOptions = {}): Executor {
       if (!p.host) return { ref: "noop:non-http-action" };
       const { url, dest, init } = httpRequestOf(p, scheme);
       // The policy decided the host as written; a name is also checked by the addresses it resolves to now.
-      if (context?.policy) await refuseDeniedAddresses(context.policy, p, dest, lookup);
+      const checked = context?.policy ? await refuseDeniedAddresses(context.policy, p, dest, lookup) : undefined;
       const signal = AbortSignal.timeout(timeoutMs);
       const timeout = () => new DispatchTimeoutError(timeoutMs);
-      const res = await untilAborted(f(url.href, { ...init, redirect: "error", signal }), signal, timeout);
+      // A name whose addresses were checked is connected to at those addresses only. An injected fetch is the caller's own
+      // transport and resolves the name itself.
+      const sent = checked && !opts.fetch
+        ? pinnedFetch(url, { ...init, signal }, checked)
+        : f(url.href, { ...init, redirect: "error", signal });
+      const res = await untilAborted(sent, signal, timeout);
       const body = await readBounded(res, maxResponseBytes, signal, timeout, false);
       return { ref: `http:${res.status}:${body.over ? "over-limit:" : ""}sha256:${body.digest.slice(0, 16)}` };
     },

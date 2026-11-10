@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { createInterface } from "node:readline";
 import { createMcpProxy, starterMcpPolicy, requestBinderFromHex, manifestHash } from "../dist/index.js";
+import { listed } from "./listed.mjs";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const keyPem = () => generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" }).toString();
@@ -32,6 +33,7 @@ const one = (m) => {
   if (m.id === undefined || m.id === null) return null;
   if (m.method === "hang") return null;
   if (m.method === "env") return { jsonrpc: "2.0", id: m.id, result: { marker: process.env.SCOPEBOND_TEST_PARENT_MARKER ?? null } };
+  if (m.method === "tools/list") return { jsonrpc: "2.0", id: m.id, result: { tools: [{ name: "read_file" }, { name: "write_file" }] } };
   if (m.method === "big") return { jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "A".repeat(m.params.bytes) }] } };
   return { jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "ran " + (m.params && m.params.name) }] } };
 };
@@ -238,7 +240,7 @@ test("a request the upstream never answers fails closed after the timeout", asyn
 test("the starter policy written by `scopebond-mcp init` allows only read-only tool names", async () => {
   const check = async (server, tool) => {
     const proxy = createMcpProxy({ policy: starterMcpPolicy(server), principal: { subject: "a", issuer: "b" }, server, attesterKeyPem: keyPem(), now: NOW,
-      upstream: { async call(m) { return { jsonrpc: "2.0", id: m.id, result: { ok: true } }; } } });
+      upstream: listed({ async call(m) { return { jsonrpc: "2.0", id: m.id, result: { ok: true } }; } }, [tool]) });
     const r = await proxy.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: tool, arguments: {} } });
     return r.error ? "deny" : "allow";
   };
