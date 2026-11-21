@@ -31,7 +31,7 @@ tauri-plugin-single-instance = "=2.5.4"
 [target.'cfg(target_os = "macos")'.dependencies]
 # Notification Center notifications posted as the app itself (Scopebond.app, bundle com.scopebond.tray: see
 # tauri.macos.conf.json), instead of through osascript, which macOS shows under Script Editor.
-tauri-plugin-notification = "=2.8.0"
+tauri-plugin-notification = "=2.8.1"
 
 [target.'cfg(windows)'.dependencies]
 # Windows notifications under the installer's AppUserModelID.
